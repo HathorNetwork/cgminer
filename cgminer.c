@@ -3712,7 +3712,9 @@ share_result(json_t *val, json_t *res, json_t *err, const struct work *work,
 
 	cgpu = get_thr_cgpu(work->thr_id);
 
-	if (json_is_true(res) || (work->gbt && json_is_null(res))) {
+	const char *resstr = json_string_value(res);
+
+	if ((resstr && (!strncmp(resstr, "block_found", 12) || !strncmp(resstr, "ok", 3))) || (work->gbt && json_is_null(res))) {
 		mutex_lock(&stats_lock);
 		cgpu->accepted++;
 		total_accepted++;
@@ -5377,6 +5379,8 @@ static bool block_exists(const char *hexstr, const unsigned char *bedata, const 
 
 static bool test_work_current(struct work *work)
 {
+	return true;
+
 	struct pool *pool = work->pool;
 	unsigned char bedata[32];
 	char hexstr[68];
@@ -6942,6 +6946,7 @@ static void *stratum_sthread(void *userdata)
 
 	while (42) {
 		char noncehex[12], nonce2hex[20], s[1024];
+		char *bignoncehex;
 		struct stratum_share *sshare;
 		uint32_t *hash32, nonce;
 		unsigned char nonce2[8];
@@ -6976,8 +6981,11 @@ static void *stratum_sthread(void *userdata)
 		}
 		last_nonce = nonce;
 		last_nonce2 = *nonce2_64;
+
+		nonce = bswap_32(nonce);
 		__bin2hex(noncehex, (const unsigned char *)&nonce, 4);
 		__bin2hex(nonce2hex, nonce2, work->nonce2_len);
+		nonce = bswap_32(nonce);
 
 		sshare = cgcalloc(sizeof(struct stratum_share), 1);
 		hash32 = (uint32_t *)work->hash;
@@ -6993,15 +7001,27 @@ static void *stratum_sthread(void *userdata)
 		sshare->id = swork_id++;
 		mutex_unlock(&sshare_lock);
 
+		{
+			uint32_t *data32 = (uint32_t *)(work->data);
+			unsigned char swap[80];
+			uint32_t *swap32 = (uint32_t *)swap;
+
+			flip80(swap32, data32);
+
+			bignoncehex = bin2hex(swap + 64, 16);
+		}
+
 		if (pool->vmask) {
 			snprintf(s, sizeof(s),
 				 "{\"params\": [\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", \"%s\"], \"id\": %d, \"method\": \"mining.submit\"}",
 				pool->rpc_user, work->job_id, nonce2hex, work->ntime, noncehex, pool->vmask_002[work->micro_job_id], sshare->id);
 		} else {
 			snprintf(s, sizeof(s),
-				"{\"params\": [\"%s\", \"%s\", \"%s\", \"%s\", \"%s\"], \"id\": %d, \"method\": \"mining.submit\"}",
-				pool->rpc_user, work->job_id, nonce2hex, work->ntime, noncehex, sshare->id);
+				"{\"params\": {\"job_id\": \"%s\", \"nonce\": \"%s\"}, \"id\": %d, \"method\": \"mining.submit\"}",
+				work->job_id, bignoncehex, sshare->id);
 		}
+
+		free(bignoncehex);
 
 		applog(LOG_INFO, "Submitting share %08lx to pool %d",
 					(long unsigned int)htole32(hash32[6]), pool->pool_no);
@@ -7570,54 +7590,39 @@ static void gen_stratum_work(struct pool *pool, struct work *work)
 	/* Update coinbase. Always use an LE encoded nonce2 to fill in values
 	 * from left to right and prevent overflow errors with small n2sizes */
 	nonce2le = htole64(pool->nonce2);
-	cg_memcpy(pool->coinbase + pool->nonce2_offset, &nonce2le, pool->n2size);
+	cg_memcpy(pool->data + pool->nonce2_offset, &nonce2le, pool->n2size);
 	work->nonce2 = pool->nonce2++;
 	work->nonce2_len = pool->n2size;
 
 	/* Downgrade to a read lock to read off the pool variables */
 	cg_dwlock(&pool->data_lock);
 
-	/* Generate merkle root */
-	gen_hash(pool->coinbase, merkle_root, pool->coinbase_len);
-	cg_memcpy(merkle_sha, merkle_root, 32);
-	for (i = 0; i < pool->merkles; i++) {
-		cg_memcpy(merkle_sha + 32, pool->swork.merkle_bin[i], 32);
-		gen_hash(merkle_sha, merkle_root, 64);
-		cg_memcpy(merkle_sha, merkle_root, 32);
-	}
-	data32 = (uint32_t *)merkle_sha;
-	swap32 = (uint32_t *)merkle_root;
-	flip32(swap32, data32);
-
-	/* Copy the data template from header_bin */
-	cg_memcpy(work->data, pool->header_bin, 112);
-	cg_memcpy(work->data + 36, merkle_root, 32);
+	/* Copy the data template from the pool */
+	cg_memcpy(work->data, pool->data, 80);
 
 	/* Store the stratum work diff to check it still matches the pool's
 	 * stratum diff when submitting shares */
-	work->sdiff = pool->sdiff;
+	//work->sdiff = pool->sdiff;
 
 	/* Copy parameters required for share submission */
 	work->job_id = strdup(pool->swork.job_id);
-	work->nonce1 = strdup(pool->nonce1);
-	work->ntime = strdup(pool->ntime);
+	//work->nonce1 = strdup(pool->nonce1);
+	//work->ntime = strdup(pool->ntime);
 	cg_runlock(&pool->data_lock);
 
 	if (opt_debug) {
-		char *header, *merkle_hash;
+		char *header;
 
-		header = bin2hex(work->data, 112);
-		merkle_hash = bin2hex((const unsigned char *)merkle_root, 32);
-		applog(LOG_DEBUG, "Generated stratum merkle %s", merkle_hash);
+		header = bin2hex(work->data, 80);
 		applog(LOG_DEBUG, "Generated stratum header %s", header);
 		applog(LOG_DEBUG, "Work job_id %s nonce2 %"PRIu64" ntime %s", work->job_id,
 		       work->nonce2, work->ntime);
 		free(header);
-		free(merkle_hash);
 	}
 
 	calc_midstate(pool, work);
-	set_target(work->target, work->sdiff);
+	//set_target(work->target, work->sdiff);
+	weight_to_target(work->target, pool->weight);
 
 	local_work++;
 	work->pool = pool;
@@ -10176,7 +10181,8 @@ int main(int argc, char *argv[])
 			hex2bin(&bench_hidiff_bins[i][0], &bench_hidiffs[i][0], 160);
 			hex2bin(&bench_lodiff_bins[i][0], &bench_lodiffs[i][0], 160);
 		}
-		set_target(bench_target, 32);
+		//set_target(bench_target, 32);
+		weight_to_target(bench_target, 18.0);
 	}
 
 #ifdef HAVE_CURSES

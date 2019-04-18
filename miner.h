@@ -1402,6 +1402,10 @@ struct pool {
 	double sdiff;
 	uint32_t current_height;
 
+	unsigned char data[80];
+	double weight;
+	size_t nonce_size;
+
 	struct timeval tv_lastwork;
 };
 
