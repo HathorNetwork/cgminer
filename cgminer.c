@@ -169,6 +169,7 @@ enum benchwork {
 static char *opt_btc_address;
 static char *opt_btc_sig;
 #endif
+char *opt_htr_address;
 struct pool *opt_btcd;
 static char *opt_benchfile;
 static bool opt_benchfile_display;
@@ -1748,6 +1749,9 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITH_ARG("--gekko-step-delay",
 		     set_int_0_to_9999, opt_show_intval, &opt_gekko_step_delay,
 		     "Ramp step interval range 1-600"),
+	OPT_WITH_ARG("--htr-address",
+		     opt_set_charp, NULL, &opt_htr_address,
+		     "Set bitcoin target address when solo mining to bitcoind (mandatory)"),
 #endif
 #ifdef HAVE_LIBCURL
 	OPT_WITH_ARG("--btc-address",
