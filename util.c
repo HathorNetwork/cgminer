@@ -2313,7 +2313,11 @@ static bool parse_notify(struct pool *pool, json_t *val)
 
 	pool->nonce2 = 0;
 	pool->nonce2_offset = 64;
-	pool->n2size= 8;
+	if (nonce_size <= 4) {
+		pool->n2size = 0;
+	} else {
+		pool->n2size = MIN(8, nonce_size - 4);
+	}
 
 out_unlock:
 	cg_wunlock(&pool->data_lock);
@@ -3094,13 +3098,10 @@ resend:
 	if (!configure_stratum_mining(pool))
 		goto out;
 
-	if (recvd) {
-		sprintf(s, "{\"id\": %d, \"method\": \"mining.subscribe\", \"params\": []}", swork_id++);
+	if (opt_htr_address) {
+		sprintf(s, "{\"id\": %d, \"method\": \"mining.subscribe\", \"params\": {\"address\":\"%s\"}}", swork_id++, opt_htr_address);
 	} else {
-		if (pool->sessionid)
-			sprintf(s, "{\"id\": %d, \"method\": \"mining.subscribe\", \"params\": [\""PACKAGE"/"VERSION""STRATUM_USER_AGENT"\", \"%s\"]}", swork_id++, pool->sessionid);
-		else
-			sprintf(s, "{\"id\": %d, \"method\": \"mining.subscribe\", \"params\": [\""PACKAGE"/"VERSION""STRATUM_USER_AGENT"\"]}", swork_id++);
+		sprintf(s, "{\"id\": %d, \"method\": \"mining.subscribe\", \"params\": []}", swork_id++);
 	}
 
 	if (__stratum_send(pool, s, strlen(s)) != SEND_OK) {
