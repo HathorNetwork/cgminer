@@ -1944,7 +1944,7 @@ static struct opt_table opt_config_table[] = {
 		    ),
 	OPT_WITH_ARG("--htr-address",
 		     opt_set_charp, NULL, &opt_htr_address,
-		     "Set bitcoin target address when solo mining to bitcoind (mandatory)"),
+		     "Set hathor target address when solo mining (mandatory)"),
 #ifdef USE_ICARUS
 	OPT_WITH_ARG("--icarus-options",
 		     opt_set_charp, NULL, &opt_icarus_options,
