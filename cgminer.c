@@ -1749,9 +1749,6 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITH_ARG("--gekko-step-delay",
 		     set_int_0_to_9999, opt_show_intval, &opt_gekko_step_delay,
 		     "Ramp step interval range 1-600"),
-	OPT_WITH_ARG("--htr-address",
-		     opt_set_charp, NULL, &opt_htr_address,
-		     "Set bitcoin target address when solo mining to bitcoind (mandatory)"),
 #endif
 #ifdef HAVE_LIBCURL
 	OPT_WITH_ARG("--btc-address",
@@ -1945,6 +1942,9 @@ static struct opt_table opt_config_table[] = {
 		     opt_hidden
 #endif
 		    ),
+	OPT_WITH_ARG("--htr-address",
+		     opt_set_charp, NULL, &opt_htr_address,
+		     "Set hathor target address when solo mining (mandatory)"),
 #ifdef USE_ICARUS
 	OPT_WITH_ARG("--icarus-options",
 		     opt_set_charp, NULL, &opt_icarus_options,
