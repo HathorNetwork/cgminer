@@ -7584,10 +7584,7 @@ bool submit_nonce2_nonce(struct thr_info *thr, struct pool *pool, struct pool *r
  * other means to detect when the pool has died in stratum_thread */
 static void gen_stratum_work(struct pool *pool, struct work *work)
 {
-	unsigned char merkle_root[32], merkle_sha[64];
-	uint32_t *data32, *swap32;
 	uint64_t nonce2le;
-	int i;
 
 	cg_wlock(&pool->data_lock);
 
