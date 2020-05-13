@@ -2314,7 +2314,14 @@ static bool parse_notify(struct pool *pool, json_t *val)
 	pool->nonce2 = 0;
 	pool->nonce2_offset = 64;
 	if (nonce_size <= 4) {
-		pool->n2size = 0;
+		// If the nonce is shorter than 4 bytes, n2 should be zero, which causes a warning later about copying 0
+		// bytes when generating the work. This doesn't seem to be a problem per se, but it would fill the logs.
+		// Also, by using n2size = 1 and nonce2_offset = 76, we always update the left-most byte of the 4-byte
+		// nonce used by the asic. This guarantees each work will be different from the previous one, which is
+		// not the case if we set n2size = 0. We don't know how the asic increments the nonce, so we're not sure if
+		// that will actually increase performance, but it won't be worst than having the same nonce in every work.
+		pool->n2size = 1;
+		pool->nonce2_offset = 76;
 	} else {
 		pool->n2size = MIN(8, nonce_size - 4);
 	}
