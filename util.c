@@ -2283,13 +2283,14 @@ static bool parse_notify(struct pool *pool, json_t *val)
 	double weight;
 	const char *data, *job_id;
 	size_t nonce_size, dsize;
-	bool ret = false;
+	bool clean, ret = false;
 
 	job_id = json_string_value(json_object_get(val, "job_id"));
 	weight = json_real_value(json_object_get(val, "weight"));
 	nonce_size = json_integer_value(json_object_get(val, "nonce_size"));
 	data = json_string_value(json_object_get(val, "data"));
 	dsize = strlen(data) / 2;
+	clean = json_is_true(json_object_get(val, "clean"));
 
 	if (!job_id || !weight || !data || !nonce_size) {
 		applog(LOG_ERR, "Stratum job: invalid parameters");
@@ -2302,6 +2303,7 @@ static bool parse_notify(struct pool *pool, json_t *val)
 
 	free(pool->swork.job_id);
 	pool->swork.job_id = strdup(job_id);
+	pool->swork.clean = clean;
 
 	unsigned char tmp[sizeof(pool->data)];
 	hex2bin(&tmp, data, dsize);
@@ -2311,7 +2313,9 @@ static bool parse_notify(struct pool *pool, json_t *val)
 	pool->weight = weight;
 	pool->nonce_size = nonce_size;
 
-	pool->nonce2 = 0;
+	if (clean) {
+		pool->nonce2 = 0;
+	}
 	pool->nonce2_offset = 64;
 	if (nonce_size <= 4) {
 		// If the nonce is shorter than 4 bytes, n2 should be zero, which causes a warning later about copying 0
@@ -2334,6 +2338,7 @@ out_unlock:
 		applog(LOG_DEBUG, "weight: %f", weight);
 		applog(LOG_DEBUG, "nonce_size: %d", nonce_size);
 		applog(LOG_DEBUG, "data: %s", data);
+		applog(LOG_DEBUG, "clean: %s", clean ? "yes" : "no");
 	}
 
 	/* A notify message is the closest stratum gets to a getwork */
