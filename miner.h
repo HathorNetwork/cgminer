@@ -3,6 +3,21 @@
 
 #include "config.h"
 
+#ifdef __GNUC__
+#ifdef __USE_FORTIFY_LEVEL
+#undef __USE_FORTIFY_LEVEL
+#endif
+// ignore n truncation warnings
+#define __USE_FORTIFY_LEVEL 1
+#if __GNUC__ >= 7
+// ignore the vast number of such non-bug warnings
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+#pragma GCC diagnostic ignored "-Wimplicit-fallthrough"
+#pragma GCC diagnostic ignored "-Wtautological-compare"
+#endif
+#endif
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/time.h>
@@ -249,6 +264,7 @@ static inline int fsync (int fd)
 	DRIVER_ADD_COMMAND(avalon2) \
 	DRIVER_ADD_COMMAND(avalon4) \
 	DRIVER_ADD_COMMAND(avalon7) \
+	DRIVER_ADD_COMMAND(avalon8) \
 	DRIVER_ADD_COMMAND(avalonm) \
 	DRIVER_ADD_COMMAND(bab) \
 	DRIVER_ADD_COMMAND(bflsc) \
@@ -257,6 +273,7 @@ static inline int fsync (int fd)
 	DRIVER_ADD_COMMAND(bitmineA1) \
 	DRIVER_ADD_COMMAND(blockerupter) \
 	DRIVER_ADD_COMMAND(cointerra) \
+	DRIVER_ADD_COMMAND(flow) \
 	DRIVER_ADD_COMMAND(gekko) \
 	DRIVER_ADD_COMMAND(dragonmintT1) \
 	DRIVER_ADD_COMMAND(hashfast) \
@@ -267,7 +284,8 @@ static inline int fsync (int fd)
 	DRIVER_ADD_COMMAND(knc) \
 	DRIVER_ADD_COMMAND(minion) \
 	DRIVER_ADD_COMMAND(sp10) \
-	DRIVER_ADD_COMMAND(sp30)
+	DRIVER_ADD_COMMAND(sp30) \
+	DRIVER_ADD_COMMAND(bitmain_soc)
 
 #define DRIVER_PARSE_COMMANDS(DRIVER_ADD_COMMAND) \
 	FPGA_PARSE_COMMANDS(DRIVER_ADD_COMMAND) \
@@ -333,7 +351,7 @@ struct device_drv {
 	struct api_data *(*get_api_debug)(struct cgpu_info *);
 	bool (*get_stats)(struct cgpu_info *);
 	void (*identify_device)(struct cgpu_info *); // e.g. to flash a led
-	char *(*set_device)(struct cgpu_info *, char *option, char *setting, char *replybuf);
+	char *(*set_device)(struct cgpu_info *, char *option, char *setting, char *replybuf, size_t siz);
 
 	// Thread-specific functions
 	bool (*thread_prepare)(struct thr_info *);
@@ -998,6 +1016,8 @@ struct pool;
 #define API_MCAST_ADDR "224.0.0.75"
 
 extern char *opt_htr_address;
+extern bool opt_mac_yield;
+extern bool opt_widescreen;
 extern bool opt_work_update;
 extern bool opt_protocol;
 extern bool have_longpoll;
@@ -1037,21 +1057,46 @@ extern bool opt_worktime;
 extern char *opt_avalon_options;
 extern char *opt_bitburner_fury_options;
 #endif
+#ifdef USE_FLOW
+extern char *opt_flow_serial;
+extern int opt_flow_start_freq;
+extern float opt_flow_step_freq;
+extern float opt_flow_freq;
+extern int opt_flow_tune;
+#endif
 #ifdef USE_GEKKO
 extern char *opt_gekko_serial;
-extern bool opt_gekko_boost;
+extern bool opt_gekko_noboost;
+extern bool opt_gekko_lowboost;
 extern bool opt_gekko_gsc_detect;
 extern bool opt_gekko_gsd_detect;
 extern bool opt_gekko_gse_detect;
 extern bool opt_gekko_gsh_detect;
+extern bool opt_gekko_gsi_detect;
+extern bool opt_gekko_gsf_detect;
+extern bool opt_gekko_r909_detect;
+extern bool opt_gekko_gsa1_detect;
+extern bool opt_gekko_gsk_detect;
 extern float opt_gekko_gsc_freq;
 extern float opt_gekko_gsd_freq;
 extern float opt_gekko_gse_freq;
+extern float opt_gekko_tune_down;
+extern float opt_gekko_tune_up;
+extern float opt_gekko_wait_factor;
+extern float opt_gekko_step_freq;
+extern int opt_gekko_bauddiv;
 extern int opt_gekko_gsh_freq;
+extern int opt_gekko_gsi_freq;
+extern int opt_gekko_gsf_freq;
+extern int opt_gekko_r909_freq;
+extern int opt_gekko_gsa1_freq;
+extern int opt_gekko_gsk_freq;
 extern int opt_gekko_gsh_vcore;
 extern int opt_gekko_start_freq;
-extern int opt_gekko_step_freq;
 extern int opt_gekko_step_delay;
+extern int opt_gekko_tune2;
+extern int opt_gekko_gsa1_start_freq;
+extern int opt_gekko_gsa1_corev;
 #endif
 #ifdef USE_KLONDIKE
 extern char *opt_klondike_options;
@@ -1169,9 +1214,17 @@ extern pthread_cond_t restart_cond;
 extern void clear_stratum_shares(struct pool *pool);
 extern void clear_pool_work(struct pool *pool);
 extern void set_target(unsigned char *dest_target, double diff);
-#if defined (USE_AVALON2) || defined (USE_AVALON4) || defined (USE_AVALON7) || defined (USE_AVALON_MINER) || defined (USE_HASHRATIO)
+#if defined (USE_AVALON2) || defined (USE_AVALON4) || defined (USE_AVALON7) || defined (USE_AVALON8) || defined (USE_AVALON_MINER) || defined (USE_HASHRATIO)
 bool submit_nonce2_nonce(struct thr_info *thr, struct pool *pool, struct pool *real_pool,
 			 uint32_t nonce2, uint32_t nonce, uint32_t ntime);
+#endif
+#ifdef USE_BITMAIN_SOC
+void get_work_by_nonce2(struct thr_info *thr,
+						struct work **work,
+						struct pool *pool,
+						struct pool *real_pool,
+						uint64_t nonce2,
+						uint32_t version);
 #endif
 extern int restart_wait(struct thr_info *thr, unsigned int mstime);
 
@@ -1231,6 +1284,22 @@ extern double current_diff;
 extern uint64_t best_diff;
 extern struct timeval block_timeval;
 extern char *workpadding;
+
+#ifdef USE_BITMAIN_SOC
+extern char displayed_hash_rate[16];
+#define NONCE_BUFF 4096
+extern char nonce_num10_string[NONCE_BUFF];
+extern char nonce_num30_string[NONCE_BUFF];
+extern char nonce_num60_string[NONCE_BUFF];
+extern char g_miner_version[256];
+extern char g_miner_compiletime[256];
+extern char g_miner_type[256];
+extern double new_total_mhashes_done;
+extern double new_total_secs;
+extern time_t total_tv_start_sys;
+extern time_t total_tv_end_sys;
+extern void writeInitLogFile(char *logstr);
+#endif
 
 struct curl_ent {
 	CURL *curl;
@@ -1408,6 +1477,11 @@ struct pool {
 	size_t nonce_size;
 
 	struct timeval tv_lastwork;
+#ifdef USE_BITMAIN_SOC
+    bool support_vil;
+    int version_num;
+    int version[4];
+#endif
 };
 
 #define GETWORK_MODE_TESTPOOL 'T'
@@ -1428,6 +1502,8 @@ struct work {
 	unsigned char	hash[32];
 
 	uint16_t        micro_job_id;
+	bool		direct_vmask;
+	unsigned char	base_bv[4];
 
 	/* This is the diff the device is currently aiming for and must be
 	 * the minimum of work_difficulty & drv->max_diff */
@@ -1485,7 +1561,24 @@ struct work {
 	struct timeval	tv_work_start;
 	struct timeval	tv_work_found;
 	char		getwork_mode;
+#ifdef USE_BITMAIN_SOC
+    int version;
+#endif
 };
+
+// enable grossly global stratum work stats
+#define STRATUM_WORK_TIMING 1
+
+#if STRATUM_WORK_TIMING
+extern cglock_t swt_lock;
+extern uint64_t stratum_work_count;
+extern uint64_t stratum_work_time;
+extern uint64_t stratum_work_min;
+extern uint64_t stratum_work_max;
+extern uint64_t stratum_work_time0;
+extern uint64_t stratum_work_time10;
+extern uint64_t stratum_work_time100;
+#endif
 
 #ifdef USE_MODMINER
 struct modminer_fpga_state {
@@ -1528,9 +1621,11 @@ struct modminer_fpga_state {
 } while (0)
 
 extern void get_datestamp(char *, size_t, struct timeval *);
+extern void inc_hw_errors_n(struct thr_info *thr, int n);
 extern void inc_hw_errors(struct thr_info *thr);
 extern bool test_nonce(struct work *work, uint32_t nonce);
 extern bool test_nonce_diff(struct work *work, uint32_t nonce, double diff);
+extern double test_nonce_value(struct work *work, uint32_t nonce);
 extern bool submit_tested_work(struct thr_info *thr, struct work *work);
 extern bool submit_nonce(struct thr_info *thr, struct work *work, uint32_t nonce);
 extern bool submit_noffset_nonce(struct thr_info *thr, struct work *work, uint32_t nonce,
@@ -1594,7 +1689,7 @@ extern struct work *copy_work_noffset(struct work *base_work, int noffset);
 #define copy_work(work_in) copy_work_noffset(work_in, 0)
 extern uint64_t share_diff(const struct work *work);
 extern struct thr_info *get_thread(int thr_id);
-extern struct cgpu_info *get_devices(int id);
+extern struct cgpu_info *get_a_device(int id);
 
 enum api_data_type {
 	API_ESCAPE,
@@ -1610,6 +1705,7 @@ enum api_data_type {
 	API_UINT64,
 	API_INT64,
 	API_DOUBLE,
+	API_FLOAT,
 	API_ELAPSED,
 	API_BOOL,
 	API_TIMEVAL,
@@ -1646,7 +1742,9 @@ extern struct api_data *api_add_uint(struct api_data *root, char *name, unsigned
 extern struct api_data *api_add_uint32(struct api_data *root, char *name, uint32_t *data, bool copy_data);
 extern struct api_data *api_add_hex32(struct api_data *root, char *name, uint32_t *data, bool copy_data);
 extern struct api_data *api_add_uint64(struct api_data *root, char *name, uint64_t *data, bool copy_data);
+extern struct api_data *api_add_int64(struct api_data *root, char *name, int64_t *data, bool copy_data);
 extern struct api_data *api_add_double(struct api_data *root, char *name, double *data, bool copy_data);
+extern struct api_data *api_add_float(struct api_data *root, char *name, float *data, bool copy_data);
 extern struct api_data *api_add_elapsed(struct api_data *root, char *name, double *data, bool copy_data);
 extern struct api_data *api_add_bool(struct api_data *root, char *name, bool *data, bool copy_data);
 extern struct api_data *api_add_timeval(struct api_data *root, char *name, struct timeval *data, bool copy_data);
