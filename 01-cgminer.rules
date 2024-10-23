@@ -53,4 +53,6 @@ ATTRS{idVendor}=="29f1", ATTRS{idProduct}=="33f2", SUBSYSTEM=="usb", ACTION=="ad
 
 # GekkoScience
 ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6015", SUBSYSTEM=="usb", ACTION=="add", MODE="0666", GROUP="plugdev"
+ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea70", SUBSYSTEM=="usb", ACTION=="add", MODE="0666", GROUP="plugdev"
+
 

@@ -1,6 +1,6 @@
 /*
+ * Copyright 2011-2024 Andrew Smith
  * Copyright 2011-2018 Con Kolivas
- * Copyright 2011-2015 Andrew Smith
  * Copyright 2011-2012 Luke Dashjr
  * Copyright 2010 Jeff Garzik
  *
@@ -11,6 +11,13 @@
  */
 
 #include "config.h"
+
+#ifdef __GNUC__
+#if __GNUC__ >= 7
+#pragma GCC diagnostic ignored "-Wcast-function-type"
+#pragma GCC diagnostic ignored "-Wstringop-truncation"
+#endif
+#endif
 
 #ifdef HAVE_CURSES
 #include <curses.h>
@@ -86,6 +93,10 @@ char *curly = ":D";
 #include "driver-avalon7.h"
 #endif
 
+#ifdef USE_AVALON8
+#include "driver-avalon8.h"
+#endif
+
 #ifdef USE_AVALON_MINER
 #include "driver-avalon-miner.h"
 #endif
@@ -113,6 +124,12 @@ char *curly = ":D";
 #ifdef USE_BITFURY16
 #include "driver-bitfury16.h"
 #endif
+
+#ifdef USE_BITMAIN_SOC
+#include <sys/sysinfo.h>
+#include "driver-btm-soc.h"
+#endif
+
 
 #ifdef USE_COINTERRA
 #include "driver-cointerra.h"
@@ -177,6 +194,7 @@ static FILE *benchfile_in;
 static int benchfile_line;
 static int benchfile_work;
 static bool opt_benchmark;
+static bool opt_blockcheck;
 bool have_longpoll;
 bool want_per_device_stats;
 bool use_syslog;
@@ -214,7 +232,8 @@ bool use_curses = true;
 #else
 bool use_curses;
 #endif
-static bool opt_widescreen;
+bool opt_mac_yield;
+bool opt_widescreen;
 static bool alt_status;
 static bool switch_status;
 static bool opt_submit_stale = true;
@@ -271,6 +290,13 @@ static char *opt_set_avalon7_voltage_level;
 static char *opt_set_avalon7_voltage_offset;
 static char *opt_set_avalon7_freq;
 #endif
+#ifdef USE_AVALON8
+static char *opt_set_avalon8_fan;
+static char *opt_set_avalon8_voltage_level;
+static char *opt_set_avalon8_voltage_level_offset;
+static char *opt_set_avalon8_freq;
+static char *opt_set_avalon8_asic_otp;
+#endif
 #ifdef USE_AVALON_MINER
 static char *opt_set_avalonm_voltage;
 static char *opt_set_avalonm_freq;
@@ -278,21 +304,53 @@ static char *opt_set_avalonm_freq;
 #ifdef USE_BLOCKERUPTER
 int opt_bet_clk = 0;
 #endif
+#ifdef USE_FLOW
+char *opt_flow_serial = NULL;
+int opt_flow_start_freq = 100;
+float opt_flow_step_freq = 5.0;
+float opt_flow_freq = 300;
+int opt_flow_tune = 0;
+#endif
 #ifdef USE_GEKKO
 char *opt_gekko_serial = NULL;
-bool opt_gekko_boost = 0;
+bool opt_gekko_noboost = 0;
+bool opt_gekko_lowboost = 0;
 bool opt_gekko_gsc_detect = 0;
 bool opt_gekko_gsd_detect = 0;
 bool opt_gekko_gse_detect = 0;
 bool opt_gekko_gsh_detect = 0;
+bool opt_gekko_gsi_detect = 0;
+bool opt_gekko_gsf_detect = 0;
+bool opt_gekko_r909_detect = 0;
+bool opt_gekko_gsa1_detect = 0;
+bool opt_gekko_gsk_detect = 0;
 float opt_gekko_gsc_freq = 150;
 float opt_gekko_gsd_freq = 100;
 float opt_gekko_gse_freq = 150;
+float opt_gekko_tune_up = 97;
+float opt_gekko_tune_down = 95;
+#if defined(__APPLE__)
+float opt_gekko_wait_factor = 0.3;
+#elif defined (WIN32)
+float opt_gekko_wait_factor = 0.4;
+#else
+float opt_gekko_wait_factor = 0.5;
+#endif
+float opt_gekko_step_freq = 6.25;
 int opt_gekko_gsh_freq = 100;
+int opt_gekko_gsi_freq = 550;
+int opt_gekko_gsf_freq = 200;
+int opt_gekko_r909_freq = 450;
+int opt_gekko_gsa1_freq = 300;
+int opt_gekko_gsk_freq = 200;
+int opt_gekko_bauddiv = 0;
 int opt_gekko_gsh_vcore = 400;
 int opt_gekko_start_freq = 100;
-int opt_gekko_step_freq = 25;
 int opt_gekko_step_delay = 15;
+bool opt_gekko_mine2 = false; // gekko code ignores it
+int opt_gekko_tune2 = 0;
+int opt_gekko_gsa1_start_freq = 300;
+int opt_gekko_gsa1_corev = 300; // 0x3c
 #endif
 #ifdef USE_HASHRATIO
 #include "driver-hashratio.h"
@@ -327,12 +385,12 @@ int opt_T1_target = 100;
 #endif
 #if defined(USE_ANT_S1) || defined(USE_ANT_S2)
 char *opt_bitmain_options;
-static char *opt_set_bitmain_fan;
+char *opt_set_bitmain_fan;
 char *opt_bitmain_freq;
 // Ignored
-static bool opt_bitmain_nobeeper;
-static bool opt_bitmain_notempoverctrl;
-static bool opt_bitmain_homemode;
+bool opt_bitmain_nobeeper;
+bool opt_bitmain_notempoverctrl;
+bool opt_bitmain_homemode;
 #endif
 #ifdef USE_ANT_S2
 #ifndef USE_ANT_S3
@@ -429,6 +487,24 @@ pthread_cond_t gws_cond;
 double rolling1, rolling5, rolling15;
 double total_rolling;
 double total_mhashes_done;
+
+#ifdef USE_BITMAIN_SOC
+char *opt_version_path = NULL;
+char displayed_hash_rate[16] = {0};
+char nonce_num10_string[NONCE_BUFF];
+char nonce_num30_string[NONCE_BUFF];
+char nonce_num60_string[NONCE_BUFF];
+char g_miner_version[256] = {0};
+char g_miner_compiletime[256] = {0};
+char g_miner_type[256] = {0};
+
+double new_total_mhashes_done;
+double new_total_secs = 1.0;
+// only used for total_secs, because we need use system info time, instead of real data time.
+time_t total_tv_start_sys;
+time_t total_tv_end_sys;
+#endif
+
 static struct timeval total_tv_start, total_tv_end;
 static struct timeval restart_tv_start, update_tv_start;
 
@@ -647,7 +723,7 @@ static struct cgpu_info *get_thr_cgpu(int thr_id)
 	return thr->cgpu;
 }
 
-struct cgpu_info *get_devices(int id)
+struct cgpu_info *get_a_device(int id)
 {
 	struct cgpu_info *cgpu;
 
@@ -869,6 +945,18 @@ static char *set_int_1_to_65535(const char *arg, int *i)
 	return set_int_range(arg, i, 1, 65535);
 }
 
+#ifdef USE_AVALON8
+static char *set_int_0_to_1(const char *arg, int *i)
+{
+	return set_int_range(arg, i, 0, 1);
+}
+
+static char *set_int_0_to_7(const char *arg, int *i)
+{
+	return set_int_range(arg, i, 0, 7);
+}
+#endif
+
 static char *set_int_0_to_5(const char *arg, int *i)
 {
 	return set_int_range(arg, i, 0, 5);
@@ -951,6 +1039,11 @@ static char *set_int_24_to_32(const char *arg, int *i)
 static char __maybe_unused *set_int_0_to_2(const char *arg, int *i)
 {
 	return set_int_range(arg, i, 0, 2);
+}
+
+static char __maybe_unused *set_int_0_to_3(const char *arg, int *i)
+{
+	return set_int_range(arg, i, 0, 3);
 }
 
 static char __maybe_unused *set_int_0_to_4(const char *arg, int *i)
@@ -1292,6 +1385,15 @@ static char *set_null(const char __maybe_unused *arg)
 	return NULL;
 }
 
+#ifdef USE_BITMAIN_SOC
+static char *set_version_path(const char *arg)
+{
+    opt_set_charp(arg, &opt_version_path);
+
+    return NULL;
+}
+#endif
+
 /* These options are available from config file or commandline */
 static struct opt_table opt_config_table[] = {
 #ifdef USE_ICARUS
@@ -1522,6 +1624,95 @@ static struct opt_table opt_config_table[] = {
 		     opt_set_invbool, &opt_avalon7_asic_debug,
 		     "Disable A3212 debug."),
 #endif
+#ifdef USE_AVALON8
+	OPT_WITH_CBARG("--avalon8-voltage-level",
+		     set_avalon8_voltage_level, NULL, &opt_set_avalon8_voltage_level,
+		     "Set Avalon8 default level of core voltage, range:[0, 15], step: 1"),
+	OPT_WITH_CBARG("--avalon8-voltage-level-offset",
+		     set_avalon8_voltage_level_offset, NULL, &opt_set_avalon8_voltage_level_offset,
+		     "Set Avalon8 default offset of core voltage level, range:[-2, 1], step: 1"),
+	OPT_WITH_CBARG("--avalon8-freq",
+		     set_avalon8_freq, NULL, &opt_set_avalon8_freq,
+		     "Set Avalon8 default frequency, range:[25, 1200], step: 25, example: 800"),
+	OPT_WITH_ARG("--avalon8-freq-sel",
+		     set_int_0_to_3, opt_show_intval, &opt_avalon8_freq_sel,
+		     "Set Avalon8 default frequency select, range:[0, 3], step: 1, example: 3"),
+	OPT_WITH_CBARG("--avalon8-fan",
+		     set_avalon8_fan, NULL, &opt_set_avalon8_fan,
+		     "Set Avalon8 target fan speed, range:[0, 100], step: 1, example: 0-100"),
+	OPT_WITH_ARG("--avalon8-temp",
+		     set_int_0_to_100, opt_show_intval, &opt_avalon8_temp_target,
+		     "Set Avalon8 target temperature, range:[0, 100]"),
+	OPT_WITH_ARG("--avalon8-polling-delay",
+		     set_int_1_to_65535, opt_show_intval, &opt_avalon8_polling_delay,
+		     "Set Avalon8 polling delay value (ms)"),
+	OPT_WITH_ARG("--avalon8-aucspeed",
+		     opt_set_intval, opt_show_intval, &opt_avalon8_aucspeed,
+		     "Set AUC3 IIC bus speed"),
+	OPT_WITH_ARG("--avalon8-aucxdelay",
+		     opt_set_intval, opt_show_intval, &opt_avalon8_aucxdelay,
+		     "Set AUC3 IIC xfer read delay, 4800 ~= 1ms"),
+	OPT_WITH_ARG("--avalon8-smart-speed",
+		     opt_set_intval, opt_show_intval, &opt_avalon8_smart_speed,
+		     "Set Avalon8 smart speed, range 0-1. 0 means Disable"),
+	OPT_WITH_ARG("--avalon8-th-pass",
+		     set_int_0_to_65535, opt_show_intval, &opt_avalon8_th_pass,
+		     "Set A3210 th pass value"),
+	OPT_WITH_ARG("--avalon8-th-fail",
+		     set_int_0_to_65535, opt_show_intval, &opt_avalon8_th_fail,
+		     "Set A3210 th fail value"),
+	OPT_WITH_ARG("--avalon8-th-init",
+		     set_int_0_to_65535, opt_show_intval, &opt_avalon8_th_init,
+		     "Set A3210 th init value"),
+	OPT_WITH_ARG("--avalon8-th-ms",
+		     set_int_0_to_65535, opt_show_intval, &opt_avalon8_th_ms,
+		     "Set A3210 th ms value"),
+	OPT_WITH_ARG("--avalon8-th-timeout",
+		     opt_set_uintval, opt_show_uintval, &opt_avalon8_th_timeout,
+		     "Set A3210 th timeout value"),
+	OPT_WITH_ARG("--avalon8-th-add",
+		     set_int_0_to_1, opt_show_intval, &opt_avalon8_th_add,
+		     "Set A3210 th add value"),
+	OPT_WITHOUT_ARG("--avalon8-iic-detect",
+		     opt_set_bool, &opt_avalon8_iic_detect,
+		     "Enable Avalon8 detect through iic controller"),
+	OPT_WITH_ARG("--avalon8-nonce-mask",
+		     set_int_24_to_32, opt_show_intval, &opt_avalon8_nonce_mask,
+		     "Set A3210 nonce mask, range 24-32."),
+	OPT_WITH_ARG("--avalon8-nonce-check",
+		     set_int_0_to_1, opt_show_intval, &opt_avalon8_nonce_check,
+		     "Set A3210 nonce check, range 0-1."),
+	OPT_WITH_ARG("--avalon8-roll-enable",
+		     set_int_0_to_1, opt_show_intval, &opt_avalon8_roll_enable,
+		     "Set A3210 roll enable, range 0-1."),
+	OPT_WITH_ARG("--avalon8-mux-l2h",
+		     set_int_0_to_2, opt_show_intval, &opt_avalon8_mux_l2h,
+		     "Set Avalon8 mux l2h, range 0-2."),
+	OPT_WITH_ARG("--avalon8-mux-h2l",
+		     set_int_0_to_1, opt_show_intval, &opt_avalon8_mux_h2l,
+		     "Set Avalon8 mux h2l, range 0-1."),
+	OPT_WITH_ARG("--avalon8-h2ltime0-spd",
+		     set_int_0_to_255, opt_show_intval, &opt_avalon8_h2ltime0_spd,
+		     "Set Avalon8 h2ltime0 spd, range 0-255."),
+	OPT_WITH_ARG("--avalon8-spdlow",
+		     set_int_0_to_3, opt_show_intval, &opt_avalon8_spdlow,
+		     "Set Avalon8 spdlow, range 0-3."),
+	OPT_WITH_ARG("--avalon8-spdhigh",
+		     set_int_0_to_3, opt_show_intval, &opt_avalon8_spdhigh,
+		     "Set Avalon8 spdhigh, range 0-3."),
+	OPT_WITH_CBARG("--avalon8-cinfo-asic",
+		     set_avalon8_asic_otp, NULL, &opt_set_avalon8_asic_otp,
+		     "Set Avalon8 cinfo asic index, range:[0, 25], step: 1"),
+	OPT_WITH_ARG("--avalon8-pid-p",
+		     set_int_0_to_9999, opt_show_intval, &opt_avalon8_pid_p,
+		     "Set Avalon8 pid-p, range 0-9999."),
+	OPT_WITH_ARG("--avalon8-pid-i",
+		     set_int_0_to_9999, opt_show_intval, &opt_avalon8_pid_i,
+		     "Set Avalon8 pid-i, range 0-9999."),
+	OPT_WITH_ARG("--avalon8-pid-d",
+		     set_int_0_to_9999, opt_show_intval, &opt_avalon8_pid_d,
+		     "Set Avalon8 pid-d, range 0-9999."),
+#endif
 #ifdef USE_AVALON_MINER
 	OPT_WITH_CBARG("--avalonm-voltage",
 		     set_avalonm_voltage, NULL, &opt_set_avalonm_voltage,
@@ -1578,9 +1769,6 @@ static struct opt_table opt_config_table[] = {
 		     "Override avalon-options for BitBurner Fury boards baud:miners:asic:timeout:freq"),
 #endif
 #if defined(USE_ANT_S1) || defined(USE_ANT_S2)
-	OPT_WITHOUT_ARG("--bitmain-auto",
-			opt_set_bool, &opt_bitmain_auto,
-			"Adjust bitmain overclock frequency dynamically for best hashrate"),
 	OPT_WITH_ARG("--bitmain-cutoff",
 		     set_int_0_to_100, opt_show_intval, &opt_bitmain_overheat,
 		     "Set bitmain overheat cut off temperature"),
@@ -1607,6 +1795,28 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITH_ARG("--bitmain-workdelay",
 		     set_int_0_to_100, opt_show_intval, &opt_bitmain_workdelay,
 		     "Set bitmain work delay (ms) 0-100"),
+	// Ignored
+	OPT_WITHOUT_ARG("--bitmain-auto",
+			opt_set_bool, &opt_bitmain_auto,
+			opt_hidden),
+	OPT_WITHOUT_ARG("--bitmain-nobeeper",
+			opt_set_bool, &opt_bitmain_nobeeper,
+			opt_hidden),
+	OPT_WITHOUT_ARG("--bitmain-notempoverctrl",
+			opt_set_bool, &opt_bitmain_notempoverctrl,
+			opt_hidden),
+#ifdef USE_ANT_S1
+	// S1 has no effect
+	OPT_WITHOUT_ARG("--bitmainbeeper",
+			opt_set_bool, &opt_bitmain_beeper,
+			opt_hidden),
+	OPT_WITHOUT_ARG("--bitmaintempoverctrl",
+			opt_set_bool, &opt_bitmain_tempoverctrl,
+			opt_hidden),
+	OPT_WITHOUT_ARG("--bitmain-homemode",
+			opt_set_bool, &opt_bitmain_homemode,
+			opt_hidden),
+#endif
 #endif
 #ifdef USE_ANT_S2
 	OPT_WITH_ARG("--bitmain-voltage",
@@ -1629,22 +1839,18 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITHOUT_ARG("--bitmaintempoverctrl",
 			opt_set_bool, &opt_bitmain_tempoverctrl,
 			"Set bitmain stop runing when temprerature is over 80 degree Celsius"),
-	// Ignored
-	OPT_WITHOUT_ARG("--bitmain-nobeeper",
-			opt_set_bool, &opt_bitmain_nobeeper,
-			opt_hidden),
-	OPT_WITHOUT_ARG("--bitmain-notempoverctrl",
-			opt_set_bool, &opt_bitmain_notempoverctrl,
-			opt_hidden),
 	OPT_WITHOUT_ARG("--bitmain-homemode",
 			opt_set_bool, &opt_bitmain_homemode,
-			opt_hidden),
+			"Set bitmain miner to home mode"),
 #endif
 #ifdef USE_BITMINE_A1
 	OPT_WITH_ARG("--bitmine-a1-options",
 		     opt_set_charp, NULL, &opt_bitmine_a1_options,
 		     "Bitmine A1 options ref_clk_khz:sys_clk_khz:spi_clk_khz:override_chip_num"),
 #endif
+	OPT_WITHOUT_ARG("--block-check",
+			opt_set_bool, &opt_blockcheck,
+			"Run a block diff check of the binary then exit"),
 #ifdef USE_BITFURY
 	OPT_WITH_ARG("--bxf-bits",
 		     set_int_32_to_63, opt_show_intval, &opt_bxf_bits,
@@ -1701,15 +1907,62 @@ static struct opt_table opt_config_table[] = {
 		     set_int_0_to_100, NULL, &opt_bf16_alarm_temp,
 		     "Set control board alarm temperature range (0 - 100)"),
 #endif
+#ifdef USE_BITMAIN_SOC
+	OPT_WITH_ARG("--version-file",
+	set_version_path, NULL, opt_hidden,
+	"Set miner version file"),
+	
+	OPT_WITHOUT_ARG("--bitmain-fan-ctrl",
+	opt_set_bool, &opt_bitmain_fan_ctrl,
+	"Enable bitmain miner fan controlling"),
+
+	OPT_WITH_ARG("--bitmain-fan-pwm",
+	set_int_0_to_100, opt_show_intval, &opt_bitmain_fan_pwm,
+	"Set bitmain fan pwm percentage 0~100"),
+
+	OPT_WITH_ARG("--bitmain-freq",
+	set_int_0_to_9999,opt_show_intval, &opt_bitmain_soc_freq,
+	"Set frequency"),
+
+	OPT_WITH_ARG("--bitmain-voltage",
+	set_int_0_to_9999,opt_show_intval, &opt_bitmain_soc_voltage,
+	"Set voltage"),
+
+	OPT_WITHOUT_ARG("--fixed-freq",
+	opt_set_bool, &opt_fixed_freq,
+	"Set bitmain miner use fixed freq"),
+
+	OPT_WITHOUT_ARG("--no-pre-heat",
+	opt_set_false, &opt_pre_heat,
+	"Set bitmain miner doesn't pre heat"),
+
+	OPT_WITH_ARG("--multi-version",
+	opt_set_intval, NULL, &opt_multi_version,
+	"Multi version mining!"),
+#endif
 #ifdef USE_BLOCKERUPTER
         OPT_WITH_ARG("--bet-clk",
                      opt_set_intval, opt_show_intval, &opt_bet_clk,
                      "Set Block Erupter clock"),
 #endif
+#ifdef USE_FLOW
+	OPT_WITH_ARG("--flow-serial",
+			 opt_set_charp, NULL, &opt_flow_serial,
+			 "Detect Flow Device by comma list of Serial Numbers"),
+	OPT_WITH_ARG("--flow-start-freq",
+		     set_int_0_to_9999, opt_show_intval, &opt_flow_start_freq,
+                     "Ramp start frequency MHz 25-500"),
+	OPT_WITH_ARG("--flow-step-freq",
+		     set_float_0_to_500, opt_show_intval, &opt_flow_step_freq,
+		     "Ramp frequency step MHz 1-100"),
+	OPT_WITH_ARG("--flow-tune",
+			set_int_0_to_9999, opt_show_intval, &opt_flow_tune,
+			"Tune up mine mins 30-9999, default 0=never"),
+#endif
 #ifdef USE_GEKKO
 	OPT_WITH_ARG("--gekko-serial",
 			 opt_set_charp, NULL, &opt_gekko_serial,
-			 "Detect GekkoScience Device by Serial Number"),
+			 "Detect GekkoScience Device by comma list of Serial Numbers"),
 	OPT_WITHOUT_ARG("--gekko-compac-detect",
 			 opt_set_bool, &opt_gekko_gsc_detect,
 			 "Detect GekkoScience Compac BM1384"),
@@ -1722,9 +1975,27 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITHOUT_ARG("--gekko-newpac-detect",
 			 opt_set_bool, &opt_gekko_gsh_detect,
 			 "Detect GekkoScience NewPac BM1387"),
-	OPT_WITHOUT_ARG("--gekko-newpac-boost",
-			 opt_set_bool, &opt_gekko_boost,
-			 "Enable GekkoScience NewPac AsicBoost"),
+	OPT_WITHOUT_ARG("--gekko-r606-detect",
+			 opt_set_bool, &opt_gekko_gsi_detect,
+			 "Detect GekkoScience Terminus BM1387"),
+	OPT_WITHOUT_ARG("--gekko-compacf-detect",
+			 opt_set_bool, &opt_gekko_gsf_detect,
+			 "Detect GekkoScience CompacF BM1397"),
+	OPT_WITHOUT_ARG("--gekko-r909-detect",
+			 opt_set_bool, &opt_gekko_r909_detect,
+			 "Detect GekkoScience Terminus R909 BM1397"),
+	OPT_WITHOUT_ARG("--gekko-compaca1-detect",
+			 opt_set_bool, &opt_gekko_gsa1_detect,
+			 "Detect GekkoScience CompacF BM1397"),
+	OPT_WITHOUT_ARG("--gekko-kbox-detect",
+			 opt_set_bool, &opt_gekko_gsk_detect,
+			 "Detect GekkoScience KBox BFCLAR"),
+	OPT_WITHOUT_ARG("--gekko-noboost",
+			 opt_set_bool, &opt_gekko_noboost,
+			 "Disable GekkoScience NewPac/R606/CompacF AsicBoost"),
+	OPT_WITHOUT_ARG("--gekko-lowboost",
+			 opt_set_bool, &opt_gekko_lowboost,
+			 "GekkoScience NewPac/R606 AsicBoost - 2 midstate"),
 	OPT_WITH_ARG("--gekko-terminus-freq",
 		     set_float_0_to_500, opt_show_floatval, &opt_gekko_gse_freq,
 		     "Set GekkoScience Terminus BM1384 frequency in MHz, range 6.25-500"),
@@ -1734,21 +2005,56 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITH_ARG("--gekko-compac-freq",
 		     set_float_0_to_500, opt_show_floatval, &opt_gekko_gsc_freq,
 		     "Set GekkoScience Compac BM1384 frequency in MHz, range 6.25-500"),
+	OPT_WITH_ARG("--gekko-tune-down",
+		     set_float_0_to_500, opt_show_floatval, &opt_gekko_tune_down,
+		     "Set GekkoScience miner minimum hash quality, range 0-100"),
+	OPT_WITH_ARG("--gekko-tune-up",
+		     set_float_0_to_500, opt_show_floatval, &opt_gekko_tune_up,
+		     "Set GekkoScience miner ramping hash threshold, rante 0-99"),
+	OPT_WITH_ARG("--gekko-wait-factor",
+		     set_float_0_to_500, opt_show_floatval, &opt_gekko_wait_factor,
+		     "Set GekkoScience miner task send wait factor, range 0.01-2.00"),
+	OPT_WITH_ARG("--gekko-bauddiv",
+		     set_int_0_to_9999, opt_show_intval, &opt_gekko_bauddiv,
+		     "Set GekkoScience BM1387 baud divider {0: auto, 1: 1.5M, 7: 375K, 13: 214K, 25: 115K}"),
 	OPT_WITH_ARG("--gekko-newpac-freq",
 		     set_int_0_to_9999, opt_show_intval, &opt_gekko_gsh_freq,
 		     "Set GekkoScience NewPac BM1387 frequency in MHz, range 50-900"),
-	OPT_WITH_ARG("--gekko-newpac-vcore",
-		     set_int_0_to_9999, opt_show_intval, &opt_gekko_gsh_vcore,
-		     "Set GekkoScience NewPac BM1387 VCORE in mV, range 300-810"),
+	OPT_WITH_ARG("--gekko-r606-freq",
+		     set_int_0_to_9999, opt_show_intval, &opt_gekko_gsi_freq,
+		     "Set GekkoScience Terminus R606 frequency in MHz, range 50-900"),
+	OPT_WITH_ARG("--gekko-compacf-freq",
+		     set_int_0_to_9999, opt_show_intval, &opt_gekko_gsf_freq,
+		     "Set GekkoScience CompacF BM1397 frequency in MHz, range 100-800"),
+	OPT_WITH_ARG("--gekko-r909-freq",
+		     set_int_0_to_9999, opt_show_intval, &opt_gekko_r909_freq,
+		     "Set GekkoScience Terminus R909 BM1397 frequency in MHz, range 100-800"),
+	OPT_WITH_ARG("--gekko-compaca1-freq",
+		     set_int_0_to_9999, opt_show_intval, &opt_gekko_gsa1_freq,
+		     "Set GekkoScience CompacA1 BM1362 frequency in MHz, range 100-800"),
+	OPT_WITH_ARG("--gekko-kbox-freq",
+		     set_int_0_to_9999, opt_show_intval, &opt_gekko_gsk_freq,
+		     "Set GekkoScience KBox BFCLAR frequency in MHz, range 120-120"),
 	OPT_WITH_ARG("--gekko-start-freq",
 		     set_int_0_to_9999, opt_show_intval, &opt_gekko_start_freq,
                      "Ramp start frequency MHz 25-500"),
 	OPT_WITH_ARG("--gekko-step-freq",
-		     set_int_0_to_9999, opt_show_intval, &opt_gekko_step_freq,
+		     set_float_0_to_500, opt_show_intval, &opt_gekko_step_freq,
 		     "Ramp frequency step MHz 1-100"),
 	OPT_WITH_ARG("--gekko-step-delay",
 		     set_int_0_to_9999, opt_show_intval, &opt_gekko_step_delay,
 		     "Ramp step interval range 1-600"),
+	OPT_WITHOUT_ARG("--gekko-mine2",
+			opt_set_bool, &opt_gekko_mine2, opt_hidden), // ignored
+	OPT_WITH_ARG("--gekko-tune2",
+			set_int_0_to_9999, opt_show_intval, &opt_gekko_tune2,
+			"Tune up mine2 mins 30-9999, default 0=never"),
+	OPT_WITH_ARG("--gekko-compaca1-start-freq",
+		     set_int_0_to_9999, opt_show_intval, &opt_gekko_gsa1_start_freq,
+                     "Ramp CompacA1 start frequency MHz 100-800"),
+	OPT_WITH_ARG("--gekko-compaca1-corev",
+		     set_int_0_to_9999, opt_show_intval, &opt_gekko_gsa1_corev,
+                     "CompacA1 core millivolts 0-500"),
 #endif
 #ifdef HAVE_LIBCURL
 	OPT_WITH_ARG("--btc-address",
@@ -1972,6 +2278,9 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITHOUT_ARG("--lowmem",
 			opt_set_bool, &opt_lowmem,
 			"Minimise caching of shares for low memory applications"),
+	OPT_WITHOUT_ARG("--mac-yield",
+			opt_set_bool, &opt_mac_yield,
+			"Allow yield on old macs (default dont)"),
 #ifdef USE_MINION
 	OPT_WITH_ARG("--minion-chipreport",
 		     set_int_0_to_100, opt_show_intval, &opt_minion_chipreport,
@@ -2355,6 +2664,9 @@ static char *opt_verusage_and_exit(const char *extra)
 #endif
 #ifdef USE_AVALON7
 		"avalon7 "
+#endif
+#ifdef USE_AVALON8
+		"avalon8 "
 #endif
 #ifdef USE_AVALON_MINER
 		"avalon miner"
@@ -4926,6 +5238,9 @@ static void _copy_work(struct work *work, const struct work *base_work, int noff
 	}
 	if (base_work->coinbase)
 		work->coinbase = strdup(base_work->coinbase);
+#ifdef USE_BITMAIN_SOC
+	work->version = base_work->version;
+#endif
 }
 
 void set_work_ntime(struct work *work, int ntime)
@@ -5324,8 +5639,8 @@ static void set_blockdiff(const struct work *work)
 {
 	uint8_t pow = work->data[72];
 	int powdiff = (8 * (0x1d - 3)) - (8 * (pow - 3));
-	if (powdiff < 8)
-		powdiff = 8;
+	if (powdiff < 0)
+		powdiff = 0;
 	uint32_t diff32 = be32toh(*((uint32_t *)(work->data + 72))) & 0x00FFFFFF;
 	double numerator = 0xFFFFULL << powdiff;
 	double ddiff = numerator / (double)diff32;
@@ -5768,7 +6083,20 @@ static time_t hashdisplay_t;
 void zero_stats(void)
 {
 	int i;
+#ifdef USE_BITMAIN_SOC
+	struct sysinfo sInfo;
+	if (sysinfo(&sInfo))
+	{
+		applog(LOG_INFO, "Failed to get sysinfo, errno:%u, reason:%s\n",
+			   errno, strerror(errno));
+		total_tv_start_sys=time(NULL);
+	}
+	else
+	{
+		total_tv_start_sys=sInfo.uptime;
+	}
 
+#endif
 	cgtime(&total_tv_start);
 	copy_time(&tv_hashmeter, &total_tv_start);
 	total_rolling = 0;
@@ -5776,6 +6104,9 @@ void zero_stats(void)
 	rolling5 = 0;
 	rolling15 = 0;
 	total_mhashes_done = 0;
+#ifdef USE_BITMAIN_SOC
+	new_total_mhashes_done = 0;
+#endif
 	total_getworks = 0;
 	total_accepted = 0;
 	total_rejected = 0;
@@ -5786,6 +6117,9 @@ void zero_stats(void)
 	total_go = 0;
 	total_ro = 0;
 	total_secs = 1.0;
+#ifdef USE_BITMAIN_SOC
+	new_total_secs = 1.0;
+#endif
 	total_diff1 = 0;
 	found_blocks = 0;
 	total_diff_accepted = 0;
@@ -5813,7 +6147,7 @@ void zero_stats(void)
 	zero_bestshare();
 
 	for (i = 0; i < total_devices; ++i) {
-		struct cgpu_info *cgpu = get_devices(i);
+		struct cgpu_info *cgpu = get_a_device(i);
 
 		copy_time(&cgpu->dev_start_tv, &total_tv_start);
 
@@ -5837,7 +6171,7 @@ void zero_stats(void)
 	}
 }
 
-static void set_highprio(void)
+static void __maybe_unused set_highprio(void)
 {
 #ifndef WIN32
 	int ret = nice(-10);
@@ -5849,7 +6183,7 @@ static void set_highprio(void)
 #endif
 }
 
-static void set_lowprio(void)
+static void __maybe_unused set_lowprio(void)
 {
 #ifndef WIN32
 	int ret = nice(10);
@@ -6489,6 +6823,20 @@ static void hashmeter(int thr_id, uint64_t hashes_done)
 	time_t now_t;
 	int diff_t;
 
+#ifdef USE_BITMAIN_SOC
+	struct sysinfo sInfo;
+	if (sysinfo(&sInfo))
+	{
+		applog(LOG_INFO, "Failed to get sysinfo, errno:%u, reason:%s\n",
+			   errno, strerror(errno));
+		total_tv_end_sys=time(NULL);
+	}
+	else
+	{
+		total_tv_end_sys=sInfo.uptime;
+	}
+#endif
+
 	cgtime(&total_tv_end);
 	tv_tdiff = tdiff(&total_tv_end, &tv_hashmeter);
 	now_t = total_tv_end.tv_sec;
@@ -6563,7 +6911,11 @@ static void hashmeter(int thr_id, uint64_t hashes_done)
 	decay_time(&rolling5, hashes_done, tv_tdiff, 300.0);
 	decay_time(&rolling15, hashes_done, tv_tdiff, 900.0);
 	global_hashrate = llround(total_rolling) * 1000000;
+#ifndef USE_BITMAIN_SOC
 	total_secs = tdiff(&total_tv_end, &total_tv_start);
+#else
+	total_secs = total_tv_end_sys*1.0-total_tv_start_sys*1.0;
+#endif
 	if (showlog) {
 		char displayed_hashes[16], displayed_rolling[16];
 		char displayed_r1[16], displayed_r5[16], displayed_r15[16];
@@ -7015,11 +7367,26 @@ static void *stratum_sthread(void *userdata)
 			bignoncehex = bin2hex(swap + 64, 16);
 		}
 
-		if (pool->vmask) {
+		if (work->direct_vmask)
+		{
+			unsigned char bvb[4], bvhex[12];
+			int v;
+			for (v = 0; v < 4; v++)
+				bvb[v] = work->data[v] & ~(work->base_bv[v]);
+			__bin2hex((char *)bvhex, bvb, 4);
+
+			snprintf(s, sizeof(s),
+				 "{\"params\": [\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", \"%s\"], \"id\": %d, \"method\": \"mining.submit\"}",
+				pool->rpc_user, work->job_id, nonce2hex, work->ntime, noncehex, bvhex, sshare->id);
+		}
+		else if (pool->vmask)
+		{
 			snprintf(s, sizeof(s),
 				 "{\"params\": [\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", \"%s\"], \"id\": %d, \"method\": \"mining.submit\"}",
 				pool->rpc_user, work->job_id, nonce2hex, work->ntime, noncehex, pool->vmask_002[work->micro_job_id], sshare->id);
-		} else {
+		}
+		else
+		{
 			snprintf(s, sizeof(s),
 				"{\"params\": {\"job_id\": \"%s\", \"nonce\": \"%s\"}, \"id\": %d, \"method\": \"mining.submit\"}",
 				work->job_id, bignoncehex, sshare->id);
@@ -7142,6 +7509,11 @@ static bool setup_gbt_solo(CURL *curl, struct pool *pool)
 			applog(LOG_ERR, "No BTC address specified, unable to mine solo on %s",
 			       pool->rpc_url);
 		}
+		goto out;
+	}
+	if (opt_btc_address[0] != '1')
+	{
+		applog(LOG_ERR, "Bitcoin address must start with 1");
 		goto out;
 	}
 	snprintf(s, 256, "{\"id\": 1, \"method\": \"validateaddress\", \"params\": [\"%s\"]}\n", opt_btc_address);
@@ -7544,7 +7916,7 @@ void set_target(unsigned char *dest_target, double diff)
 	cg_memcpy(dest_target, target, 32);
 }
 
-#if defined (USE_AVALON2) || defined (USE_AVALON4) || defined (USE_AVALON7) || defined (USE_AVALON_MINER) || defined (USE_HASHRATIO)
+#if defined (USE_AVALON2) || defined (USE_AVALON4) || defined (USE_AVALON7) || defined (USE_AVALON8) || defined (USE_AVALON_MINER) || defined (USE_HASHRATIO)
 bool submit_nonce2_nonce(struct thr_info *thr, struct pool *pool, struct pool *real_pool,
 			 uint32_t nonce2, uint32_t nonce,  uint32_t ntime)
 {
@@ -7579,12 +7951,65 @@ bool submit_nonce2_nonce(struct thr_info *thr, struct pool *pool, struct pool *r
 }
 #endif
 
+#ifdef USE_BITMAIN_SOC
+void get_work_by_nonce2(struct thr_info *thr,
+						struct work **work,
+						struct pool *pool,
+						struct pool *real_pool,
+						uint64_t nonce2,
+						uint32_t version)
+{
+	*work = make_work();
+	const int thr_id = thr->id;
+	struct cgpu_info *cgpu = thr->cgpu;
+	struct device_drv *drv = cgpu->drv;
+	cg_wlock(&pool->data_lock);
+	pool->nonce2 = nonce2;
+	//if(pool->support_vil) // comment as default
+	version = Swap32(version);
+	cg_memcpy(pool->header_bin, &version, 4);
+	cg_wunlock(&pool->data_lock);
+
+	gen_stratum_work(pool, *work);
+
+	(*work)->pool = real_pool;
+
+	(*work)->thr_id = thr_id;
+	(*work)->work_block = work_block;
+	(*work)->pool->works++;
+
+	(*work)->mined = true;
+	(*work)->version = version;
+}
+#endif
+
+#if STRATUM_WORK_TIMING
+cglock_t swt_lock;
+uint64_t stratum_work_count;
+uint64_t stratum_work_time;
+uint64_t stratum_work_min;
+uint64_t stratum_work_max;
+uint64_t stratum_work_time0;
+uint64_t stratum_work_time10;
+uint64_t stratum_work_time100;
+#endif
+
 /* Generates stratum based work based on the most recent notify information
  * from the pool. This will keep generating work while a pool is down so we use
  * other means to detect when the pool has died in stratum_thread */
 static void gen_stratum_work(struct pool *pool, struct work *work)
 {
+	//unsigned char merkle_root[32], merkle_sha[64];
+	//uint32_t *data32, *swap32;
+#if STRATUM_WORK_TIMING
+	struct timeval stt;
+	double usec;
+#endif
 	uint64_t nonce2le;
+
+#if STRATUM_WORK_TIMING
+	cgtime(&stt);
+#endif
 
 	cg_wlock(&pool->data_lock);
 
@@ -7637,6 +8062,29 @@ static void gen_stratum_work(struct pool *pool, struct work *work)
 	calc_diff(work, work->sdiff);
 
 	cgtime(&work->tv_staged);
+
+#if STRATUM_WORK_TIMING
+	usec = us_tdiff(&work->tv_staged, &stt);
+	cg_wlock(&swt_lock);
+	stratum_work_count++;
+	stratum_work_time += usec;
+	if (stratum_work_min == 0 || stratum_work_min > usec)
+		stratum_work_min = usec;
+	if (stratum_work_max < usec)
+		stratum_work_max = usec;
+	if (usec == 0)
+		stratum_work_time0++;
+	else
+	{
+		if (usec >= 10)
+		{
+			stratum_work_time10++;
+			if (usec >= 100)
+				stratum_work_time100++;
+		}
+	}
+	cg_wunlock(&swt_lock);
+#endif
 }
 
 #ifdef HAVE_LIBCURL
@@ -7898,17 +8346,22 @@ static void submit_work_async(struct work *work)
 	}
 }
 
-void inc_hw_errors(struct thr_info *thr)
+void inc_hw_errors_n(struct thr_info *thr, int n)
 {
 	applog(LOG_INFO, "%s %d: invalid nonce - HW error", thr->cgpu->drv->name,
 	       thr->cgpu->device_id);
 
 	mutex_lock(&stats_lock);
-	hw_errors++;
-	thr->cgpu->hw_errors++;
+	hw_errors += n;
+	thr->cgpu->hw_errors += n;
 	mutex_unlock(&stats_lock);
 
 	thr->cgpu->drv->hw_error(thr);
+}
+
+void inc_hw_errors(struct thr_info *thr)
+{
+	inc_hw_errors_n(thr, 1);
 }
 
 /* Fills in the work nonce and builds the output data in work->hash */
@@ -7942,6 +8395,23 @@ bool test_nonce_diff(struct work *work, uint32_t nonce, double diff)
 	return (le64toh(*hash64) <= diff64);
 }
 
+/* testing a nonce and return the diff - 0 means invalid */
+double test_nonce_value(struct work *work, uint32_t nonce)
+{
+	uint32_t *hash_32 = (uint32_t *)(work->hash + 28);
+	double d64, s64, ds;
+
+	rebuild_nonce(work, nonce);
+	if (*hash_32 != 0)
+		return 0.0;
+
+	d64 = truediffone;
+	s64 = le256todouble(work->hash);
+	ds = d64 / s64;
+
+	return ds;
+}
+
 static void update_work_stats(struct thr_info *thr, struct work *work)
 {
 	double test_diff = current_diff;
@@ -7970,6 +8440,11 @@ bool submit_tested_work(struct thr_info *thr, struct work *work)
 {
 	struct work *work_out;
 	update_work_stats(thr, work);
+
+	// dev testing logging the difficulty of all nonces
+	//double diff = truediffone / le256todouble(work->hash);
+	//applog(LOG_ERR, "%s() %s %d: diff=%.1f", __func__,
+	//	thr->cgpu->drv->name, thr->cgpu->device_id, diff);
 
 	if (!fulltest(work->hash, work->target)) {
 		applog(LOG_INFO, "%s %d: Share above target", thr->cgpu->drv->name,
@@ -9079,7 +9554,7 @@ static void *watchdog_thread(void __maybe_unused *userdata)
 			curses_print_status();
 			count = 0;
 			for (i = 0; i < total_devices; i++) {
-				cgpu = get_devices(i);
+				cgpu = get_a_device(i);
 #ifndef USE_USBUTILS
 				if (cgpu)
 #else
@@ -9089,7 +9564,7 @@ static void *watchdog_thread(void __maybe_unused *userdata)
 			}
 #ifdef USE_USBUTILS
 			for (i = 0; i < total_devices; i++) {
-				cgpu = get_devices(i);
+				cgpu = get_a_device(i);
 				if (cgpu && cgpu->usbinfo.nodev)
 					curses_print_devstatus(cgpu, i, count++);
 			}
@@ -9152,7 +9627,7 @@ static void *watchdog_thread(void __maybe_unused *userdata)
 		}
 
 		for (i = 0; i < total_devices; ++i) {
-			struct cgpu_info *cgpu = get_devices(i);
+			struct cgpu_info *cgpu = get_a_device(i);
 			struct thr_info *thr = cgpu->thr[0];
 			enum dev_enable *denable;
 			char dev_str[8];
@@ -9280,7 +9755,7 @@ void print_summary(void)
 
 	applog(LOG_WARNING, "Summary of per device statistics:\n");
 	for (i = 0; i < total_devices; ++i) {
-		struct cgpu_info *cgpu = get_devices(i);
+		struct cgpu_info *cgpu = get_a_device(i);
 
 		cgpu->drv->get_statline_before = &blank_get_statline_before;
 		cgpu->drv->get_statline = &noop_get_statline;
@@ -9300,6 +9775,20 @@ void print_summary(void)
 
 static void clean_up(bool restarting)
 {
+#ifdef USE_BITMAIN_SOC
+	struct sysinfo sInfo;
+	if (sysinfo(&sInfo))
+	{
+		applog(LOG_INFO, "Failed to get sysinfo, errno:%u, reason:%s\n",
+			   errno, strerror(errno));
+		total_tv_end_sys=time(NULL);
+	}
+	else
+	{
+		total_tv_end_sys=sInfo.uptime;
+	}
+#endif
+
 #ifdef USE_USBUTILS
 	usb_polling = false;
 	pthread_join(usb_poll_thread, NULL);
@@ -10042,6 +10531,31 @@ static void initialise_usb(void) {
 #define initialise_usb() {}
 #endif
 
+#ifdef USE_BITMAIN_SOC
+void setStartTimePoint()
+{
+	char logstr[256];
+	struct sysinfo sInfo;
+	if (sysinfo(&sInfo))
+	{
+		sprintf(logstr, "Failed to get sysinfo, errno:%u, reason:%s\n",
+				errno, strerror(errno));
+		writeInitLogFile(logstr);
+
+		total_tv_start_sys=time(NULL);
+		total_tv_end_sys=total_tv_start_sys+1;
+	}
+	else
+	{
+		total_tv_start_sys=sInfo.uptime;
+		total_tv_end_sys=total_tv_start_sys+1;
+
+		sprintf(logstr, "setStartTimePoint total_tv_start_sys=%d total_tv_end_sys=%d\n",total_tv_start_sys, total_tv_end_sys);
+		writeInitLogFile(logstr);
+	}
+}
+#endif
+
 int main(int argc, char *argv[])
 {
 	struct sigaction handler;
@@ -10092,6 +10606,9 @@ int main(int argc, char *argv[])
 	rwlock_init(&netacc_lock);
 	rwlock_init(&mining_thr_lock);
 	rwlock_init(&devices_lock);
+#if STRATUM_WORK_TIMING
+	cglock_init(&swt_lock);
+#endif
 
 	mutex_init(&lp_lock);
 	if (unlikely(pthread_cond_init(&lp_cond, NULL)))
@@ -10159,6 +10676,102 @@ int main(int argc, char *argv[])
 	if (!config_loaded)
 		load_default_config();
 
+	// use this to test diff value handing on various builds and architectures.
+	// since share submission depends on the difficulty calculated vs the pool
+	// work requirement, if this test fails, cgminer could discard a block due
+	// to the difficulty calculation being wrong and too low vs the pool work
+	if (opt_blockcheck)
+	{
+// how many bits are skipped for diffone
+#define BC_DIFF1_BITS 32
+// number of bits in a hash
+#define BC_MAX_BITS 256
+// number of bits set to 1 for diffone
+#define BC_TEST_BITS 16
+#define HEX_BYTE 8
+// ratio limits on the difference between actual and test
+#define BC_DELTA_PLUS_LIM 0.00000001
+#define BC_DELTA_MINUS_LIM (-0.00000001)
+
+		struct work test_work;
+
+#define ASSERTbc(condition) __maybe_unused static char sizeof_work_hash_must_be_32[(condition)?1:-1]
+ASSERTbc(sizeof(test_work.hash) == (BC_MAX_BITS / HEX_BYTE));
+
+		double test, delta, ratio, change, powval, powdelta, powratio;
+		double diff = 1.0, prevdiff = 0.0, prevtest = 0.0;
+		bool deltabad, diffbad, fail = false;
+		int i, byte, j;
+
+		for (i = BC_DIFF1_BITS; i < BC_MAX_BITS - BC_TEST_BITS; i += HEX_BYTE)
+		{
+			byte = ((BC_MAX_BITS - 1) - i) / HEX_BYTE;
+
+			// set the hash value to 0000...00ffff00...0000
+
+			for (j = 0; j < (BC_MAX_BITS / HEX_BYTE); j++)
+				test_work.hash[j] = 0;
+
+			// BC_TEST_BITS
+			test_work.hash[byte] = 0xff;
+			test_work.hash[byte - 1] = 0xff;
+
+			// Of course MUST use the same calculation as all diff value tests
+			//  use to decide when to submit shares
+			test = truediffone / le256todouble(test_work.hash);
+
+			delta = diff - test;
+			ratio = delta / diff;
+
+			if (ratio < BC_DELTA_MINUS_LIM || ratio > BC_DELTA_PLUS_LIM)
+			{
+				deltabad = true;
+				fail = true;
+			}
+			else
+				deltabad = false;
+
+			powval = pow(2.0, (double)(i - BC_DIFF1_BITS));
+			powdelta = diff - powval;
+			powratio = powdelta / powval;
+
+			if (powratio < BC_DELTA_MINUS_LIM || powratio > BC_DELTA_PLUS_LIM)
+			{
+				diffbad = true;
+				fail = true;
+			}
+			else
+				diffbad = false;
+
+			if (diff < prevdiff || test < prevtest)
+				fail = true;
+
+			printf("%3d%s%s real=%.8E calc=%.8E delta=%.8E%s pow=%.8E powdelta=%.8E%s\n",
+				i, (diff < prevdiff) ? " FATAL DROP IN DIFF:": "",
+				(test < prevtest) ? " FATAL DROP IN TEST:": "", diff,
+				test, delta, deltabad ? " DELTA TOO LARGE!" : "",
+				powval, powdelta, diffbad ? " POW DELTA TOO LARGE!" : "");
+
+			prevtest = test;
+			prevdiff = diff;
+
+			diff *= (1 << HEX_BYTE);
+
+			change = diff / prevdiff;
+			if (change != (1 << HEX_BYTE))
+			{
+				fail = true;
+				printf("FATAL for %d double size doesn't handle above %.8E\n", i, prevdiff);
+			}
+		}
+		if (fail)
+			printf("\nTEST FAILED! See above.\n");
+		else
+			printf("\nTest succeeded.\n");
+
+		return 0;
+	}
+
 	if (opt_benchmark || opt_benchfile) {
 		struct pool *pool;
 
@@ -10185,6 +10798,65 @@ int main(int argc, char *argv[])
 		//set_target(bench_target, 32);
 		weight_to_target(bench_target, 18.0);
 	}
+
+#ifdef USE_BITMAIN_SOC
+	if(opt_version_path)
+	{
+		FILE * fpversion = fopen(opt_version_path, "rb");
+		char tmp[256] = {0};
+		int len = 0;
+		char * start = 0;
+
+		if(fpversion == NULL)
+		{
+			applog(LOG_ERR, "Open miner version file %s error", opt_version_path);
+		}
+		else
+		{
+			len = fread(tmp, 1, 256, fpversion);
+
+			if(len <= 0)
+			{
+				applog(LOG_ERR, "Read miner version file %s error %d", opt_version_path, len);
+			}
+			else
+			{
+				start = strstr(tmp, "\n");
+
+				if(start == NULL)
+				{
+					strcpy(g_miner_compiletime, tmp);
+				}
+				else
+				{
+					cg_memcpy(g_miner_compiletime, tmp, start-tmp);
+					strcpy(g_miner_type, start+1);
+				}
+
+				if(g_miner_compiletime[strlen(g_miner_compiletime)-1] == '\n')
+				{
+					g_miner_compiletime[strlen(g_miner_compiletime)-1] = 0;
+				}
+
+				if(g_miner_compiletime[strlen(g_miner_compiletime)-1] == '\r')
+				{
+					g_miner_compiletime[strlen(g_miner_compiletime)-1] = 0;
+				}
+
+				if(g_miner_type[strlen(g_miner_type)-1] == '\n')
+				{
+					g_miner_type[strlen(g_miner_type)-1] = 0;
+				}
+
+				if(g_miner_type[strlen(g_miner_type)-1] == '\r')
+				{
+					g_miner_type[strlen(g_miner_type)-1] = 0;
+				}
+			}
+		}
+		applog(LOG_ERR, "Miner compile time: %s type: %s", g_miner_compiletime, g_miner_type);
+	}
+#endif
 
 #ifdef HAVE_CURSES
 	if (opt_realquiet || opt_display_devs || opt_decode)
@@ -10422,6 +11094,21 @@ begin_bench:
 	cgtime_real(&total_tv_start);
 	get_datestamp(datestamp, sizeof(datestamp), &total_tv_start);
 
+#ifdef USE_BITMAIN_SOC
+	struct sysinfo sInfo;
+	if (sysinfo(&sInfo))
+	{
+		applog(LOG_INFO, "Failed to get sysinfo, errno:%u, reason:%s\n",
+			   errno, strerror(errno));
+		total_tv_end_sys=time(NULL);
+		total_tv_start_sys=time(NULL);
+	}
+	else
+	{
+		total_tv_end_sys=sInfo.uptime;
+		total_tv_start_sys=sInfo.uptime;
+	}
+#endif
 	cgtime(&total_tv_start);
 	cgtime(&total_tv_end);
 	cgtime(&tv_hashmeter);
