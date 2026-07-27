@@ -11,6 +11,48 @@ This code is licensed under the GPLv3. This means that the source to any
 modifications you make to this code MUST be provided by law if you distribute
 modified binaries. See COPYING for details.
 
+
+HATHOR FORK NOTES
+-----------------
+
+This fork exists to mine Hathor transactions via tx-mining-service, which
+differs from Bitcoin pool mining in one way that matters for hardware setup:
+jobs arrive at weight 17-32, i.e. difficulties far BELOW 1, and each job lives
+only tens of milliseconds before another miner solves it.
+
+--gekko-ticket-diff <1-64, or 0>   (default: 1)
+
+  Ticket difficulty requested from BM1397 (Compac F) and BM1362 chips.
+
+  The ticket is the floor below which the ASIC reports no nonce at all. Stock
+  cgminer always asks for the highest ticket the chip supports - 16 on a single
+  Compac F - because a Bitcoin pool's difficulty is always well above it. For
+  Hathor that assumption is wrong: a chip at ticket 16 cannot report anything
+  below weight 36, so it can never answer a tx job, however fast it hashes.
+
+  Measured on mainnet: a 75.8 GH/s Compac F at ticket 16 takes ~906 ms to report
+  anything, against a median tx lifetime of 54 ms - it solved 0 of 133 txs over
+  48 hours. At ticket 1 the same device reports in ~57 ms.
+
+  Leave this at the default of 1 for Hathor mining. Set it to 0 to restore the
+  stock behaviour (chip maximum) if you point this build at a Bitcoin pool.
+
+  BM1384 (2Pac, Terminus) and BM1387 (NewPac) chips do not use this setting;
+  their ticket is derived from hashrate and already lands at 1 in practice.
+
+Building on a modern toolchain
+
+  GCC 10 and newer default to -fno-common, which this codebase predates. Without
+  the flag below the link fails with "multiple definition of `xxx_drv'" for every
+  driver. This affects the unmodified upstream tree too, not just this fork:
+
+    ./autogen.sh --enable-gekko CFLAGS="-O2 -fcommon"
+    make
+
+  Verified on Ubuntu 22.04 with the dependency list under "If building on Ubuntu"
+  below.
+
+
 Search below for the following headings for details about mining
 
 EXECUTIVE SUMMARY ON USAGE

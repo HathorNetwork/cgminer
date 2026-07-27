@@ -1074,14 +1074,15 @@ struct TICKET_INFO
 // ticket restart checks allowed before forced to diff=1
 #define MAX_TICKET_CHECK 3
 
-// Ticket difficulty to request from the chip.
+// The ticket difficulty requested from the chip is opt_gekko_ticket_diff,
+// set with --gekko-ticket-diff (default 1, 0 = the chip's highest valid).
 //
-// Upstream passes 0.0 ("set the highest valid the chip supports", which is diff
-// 16 on a GSF/Compac F) on the assumption stated at the call sites: "pool will
-// be above this anyway". That holds for Bitcoin pools; it does NOT hold for
-// Hathor tx mining, where jobs arrive at weight 17-32 - difficulties far below
-// 1. A chip whose ticket is 16 cannot report a nonce below weight 36, so it can
-// never answer any tx job at all, no matter how fast it hashes.
+// Upstream always passed 0.0 here, on the assumption stated at the call sites:
+// "pool will be above this anyway". That holds for Bitcoin pools; it does NOT
+// hold for Hathor tx mining, where jobs arrive at weight 17-32 - difficulties
+// far below 1. The ticket is the floor below which the chip reports nothing, so
+// a chip at the GSF/Compac F maximum of 16 cannot report a nonce below weight
+// 36 and can never answer any tx job at all, however fast it hashes.
 //
 // Measured in production: a 75.8 GH/s Compac F at ticket 16 needs
 // 16 * 2^32 / 75.8e9 = ~906 ms to report anything, against a median tx lifetime
@@ -1093,7 +1094,6 @@ struct TICKET_INFO
 // 50-nonce count almost immediately.
 //
 // See HathorNetwork/ops-tools#1415 and #1426.
-#define HTR_TICKET_DIFF 1.0
 
 // ticket values, diff descending. List values rather than calc them
 // end comments are how long at given task/sec (15 ~= 60 1diff nonce/sec = ~260GH/s)
@@ -1536,10 +1536,10 @@ static void compac_send_chain_inactive(struct cgpu_info *compac)
 		compac_send2(compac, init4, sizeof(init4), 8 * sizeof(init4) - 8, "init4");
 		gekko_usleep(info, MS2US(100));
 
-		// set the ticket low enough that Hathor tx jobs (weight 17-32) can be answered
-		// NB: upstream used 0.0 here ("highest valid") assuming the pool would always
-		// be above it - untrue for tx mining. See HTR_TICKET_DIFF above.
-		set_ticket(compac, HTR_TICKET_DIFF, true, false);
+		// set the ticket per --gekko-ticket-diff so Hathor tx jobs (weight 17-32) can be answered
+		// NB: upstream hardcoded 0.0 here ("highest valid") assuming the pool would always
+		// be above it - untrue for tx mining. See the ticket_1397 comment above.
+		set_ticket(compac, opt_gekko_ticket_diff, true, false);
 
 		unsigned char init5[] = {0x51, 0x09, 0x00, 0x68, 0xC0, 0x70, 0x01, 0x11, 0x00};
 		unsigned char init6[] = {0x51, 0x09, 0x00, 0x28, 0x06, 0x00, 0x00, 0x0F, 0x00};
@@ -1602,10 +1602,10 @@ static void compac_send_chain_inactive(struct cgpu_info *compac)
 		compac_send2(compac, init4, sizeof(init4), 8 * sizeof(init4) - 8, "init4");
 		gekko_usleep(info, MS2US(100));
 
-		// set the ticket low enough that Hathor tx jobs (weight 17-32) can be answered
-		// NB: upstream used 0.0 here ("highest valid") assuming the pool would always
-		// be above it - untrue for tx mining. See HTR_TICKET_DIFF above.
-		set_ticket(compac, HTR_TICKET_DIFF, true, false);
+		// set the ticket per --gekko-ticket-diff so Hathor tx jobs (weight 17-32) can be answered
+		// NB: upstream hardcoded 0.0 here ("highest valid") assuming the pool would always
+		// be above it - untrue for tx mining. See the ticket_1397 comment above.
+		set_ticket(compac, opt_gekko_ticket_diff, true, false);
 
 		unsigned char init5[] = {0x51, 0x09, 0x00, 0x54, 0x00, 0x00, 0x00, 0x03, 0x00};
 		unsigned char init6[] = {0x51, 0x09, 0x00, 0x58, 0x00, 0x01, 0x11, 0x11, 0x00};
@@ -2303,7 +2303,7 @@ static void compac_gsf_nonce(struct cgpu_info *compac, K_ITEM *item)
 						applog(LOG_ERR, "%d: %s %d - ticket %u failed too many times setting to max",
 							compac->cgminer_id, compac->drv->name, compac->device_id, ticket_1397[i].diff);
 						//set_ticket(compac, 1.0, true, true);
-						set_ticket(compac, HTR_TICKET_DIFF, true, true);
+						set_ticket(compac, opt_gekko_ticket_diff, true, true);
 						info->ticket_ok = true;
 						break;
 					}
@@ -2314,7 +2314,7 @@ static void compac_gsf_nonce(struct cgpu_info *compac, K_ITEM *item)
 
 					// try again ...
 					//set_ticket(compac, ticket_1397[i].diff, true, true);
-					set_ticket(compac, HTR_TICKET_DIFF, true, true);
+					set_ticket(compac, opt_gekko_ticket_diff, true, true);
 					info->ticket_failures++;
 					break;
 				}
@@ -2346,7 +2346,7 @@ static void compac_gsf_nonce(struct cgpu_info *compac, K_ITEM *item)
 							compac->cgminer_id, compac->drv->name, compac->device_id, ticket_1397[i].diff);
 
 						//set_ticket(compac, 1.0, true, true);
-						set_ticket(compac, HTR_TICKET_DIFF, true, true);
+						set_ticket(compac, opt_gekko_ticket_diff, true, true);
 						info->ticket_ok = true;
 						break;
 					}
@@ -2357,7 +2357,7 @@ static void compac_gsf_nonce(struct cgpu_info *compac, K_ITEM *item)
 
 					// try again ...
 					//set_ticket(compac, ticket_1397[i].diff, true, true);
-					set_ticket(compac, HTR_TICKET_DIFF, true, true);
+					set_ticket(compac, opt_gekko_ticket_diff, true, true);
 					info->ticket_failures++;
 					break;
 				}
@@ -2558,7 +2558,7 @@ static void compac_gsa1_nonce(struct cgpu_info *compac, K_ITEM *item)
 						applog(LOG_ERR, "%d: %s %d - ticket %u failed too many times setting to max",
 							compac->cgminer_id, compac->drv->name, compac->device_id, ticket_1397[i].diff);
 						//set_ticket(compac, 1.0, true, true);
-						set_ticket(compac, HTR_TICKET_DIFF, true, true);
+						set_ticket(compac, opt_gekko_ticket_diff, true, true);
 						info->ticket_ok = true;
 						break;
 					}
@@ -2569,7 +2569,7 @@ static void compac_gsa1_nonce(struct cgpu_info *compac, K_ITEM *item)
 
 					// try again ...
 					//set_ticket(compac, ticket_1397[i].diff, true, true);
-					set_ticket(compac, HTR_TICKET_DIFF, true, true);
+					set_ticket(compac, opt_gekko_ticket_diff, true, true);
 					info->ticket_failures++;
 					break;
 				}
@@ -2601,7 +2601,7 @@ static void compac_gsa1_nonce(struct cgpu_info *compac, K_ITEM *item)
 							compac->cgminer_id, compac->drv->name, compac->device_id, ticket_1397[i].diff);
 
 						//set_ticket(compac, 1.0, true, true);
-						set_ticket(compac, HTR_TICKET_DIFF, true, true);
+						set_ticket(compac, opt_gekko_ticket_diff, true, true);
 						info->ticket_ok = true;
 						break;
 					}
@@ -2612,7 +2612,7 @@ static void compac_gsa1_nonce(struct cgpu_info *compac, K_ITEM *item)
 
 					// try again ...
 					//set_ticket(compac, ticket_1397[i].diff, true, true);
-					set_ticket(compac, HTR_TICKET_DIFF, true, true);
+					set_ticket(compac, opt_gekko_ticket_diff, true, true);
 					info->ticket_failures++;
 					break;
 				}
@@ -2823,7 +2823,7 @@ applog(LOG_ERR, "DBG submit would be: N:'%s' BV:'%s' work=%02x %02x %02x %02x",
 						applog(LOG_ERR, "%d: %s %d - ticket %u failed too many times setting to max",
 							compac->cgminer_id, compac->drv->name, compac->device_id, ticket_1397[i].diff);
 						//set_ticket(compac, 1.0, true, true);
-						set_ticket(compac, HTR_TICKET_DIFF, true, true);
+						set_ticket(compac, opt_gekko_ticket_diff, true, true);
 						info->ticket_ok = true;
 						break;
 					}
@@ -2834,7 +2834,7 @@ applog(LOG_ERR, "DBG submit would be: N:'%s' BV:'%s' work=%02x %02x %02x %02x",
 
 					// try again ...
 					//set_ticket(compac, ticket_1397[i].diff, true, true);
-					set_ticket(compac, HTR_TICKET_DIFF, true, true);
+					set_ticket(compac, opt_gekko_ticket_diff, true, true);
 					info->ticket_failures++;
 					break;
 				}
@@ -2866,7 +2866,7 @@ applog(LOG_ERR, "DBG submit would be: N:'%s' BV:'%s' work=%02x %02x %02x %02x",
 							compac->cgminer_id, compac->drv->name, compac->device_id, ticket_1397[i].diff);
 
 						//set_ticket(compac, 1.0, true, true);
-						set_ticket(compac, HTR_TICKET_DIFF, true, true);
+						set_ticket(compac, opt_gekko_ticket_diff, true, true);
 						info->ticket_ok = true;
 						break;
 					}
@@ -2877,7 +2877,7 @@ applog(LOG_ERR, "DBG submit would be: N:'%s' BV:'%s' work=%02x %02x %02x %02x",
 
 					// try again ...
 					//set_ticket(compac, ticket_1397[i].diff, true, true);
-					set_ticket(compac, HTR_TICKET_DIFF, true, true);
+					set_ticket(compac, opt_gekko_ticket_diff, true, true);
 					info->ticket_failures++;
 					break;
 				}
