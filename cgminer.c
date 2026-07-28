@@ -1359,12 +1359,19 @@ static char *set_float_0_to_500(const char *arg, float *i)
 	return NULL;
 }
 
+#ifdef USE_GEKKO
 static char *set_float_ticket_diff(const char *arg, float *i)
 {
 	char *err = opt_set_floatval(arg, i);
 
 	if (err)
 		return err;
+
+	// Reject NaN explicitly: every comparison against NaN is false, so it would
+	// slip past the range test below and reach set_ticket(), where floor(NaN)
+	// matches no ticket_1397[] entry and leaves the device's ticket unset.
+	if (isnan(*i))
+		return "Value must be a number";
 
 	// 0 means "let the chip pick the highest ticket it supports". Above 0 the
 	// value must be at least 1: set_ticket() floors it and the lowest
@@ -1375,6 +1382,7 @@ static char *set_float_ticket_diff(const char *arg, float *i)
 
 	return NULL;
 }
+#endif
 
 static char *set_float_125_to_500(const char *arg, float *i)
 {
@@ -6056,6 +6064,9 @@ void write_config(FILE *fcfg)
 
 			if (opt->type & OPT_HASARG &&
 			    ((void *)opt->cb_arg == (void *)set_float_0_to_500 ||
+#ifdef USE_GEKKO
+			     (void *)opt->cb_arg == (void *)set_float_ticket_diff ||
+#endif
 			     (void *)opt->cb_arg == (void *)set_float_125_to_500 ||
 			     (void *)opt->cb_arg == (void *)set_float_100_to_250)) {
 				fprintf(fcfg, ",\n\"%s\" : \"%.1f\"", p+2, *(float *)opt->u.arg);
