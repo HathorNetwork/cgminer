@@ -1082,7 +1082,10 @@ struct TICKET_INFO
 // hold for Hathor tx mining, where jobs arrive at weight 17-32 - difficulties
 // far below 1. The ticket is the floor below which the chip reports nothing, so
 // a chip at the GSF/Compac F maximum of 16 cannot report a nonce below weight
-// 36 and can never answer any tx job at all, however fast it hashes.
+// 36. That nonce would over-satisfy a weight-17 tx, so the chip can answer one
+// in principle - but only once it finds weight-36 work, which takes
+// ticket * 2^32 / hashrate. At any hashrate these sticks reach, that is far
+// longer than a tx lives, so in practice it answers nothing.
 //
 // Measured in production: a 75.8 GH/s Compac F at ticket 16 needs
 // 16 * 2^32 / 75.8e9 = ~906 ms to report anything, against a median tx lifetime

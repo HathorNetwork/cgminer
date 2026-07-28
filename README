@@ -28,7 +28,10 @@ only tens of milliseconds before another miner solves it.
   cgminer always asks for the highest ticket the chip supports - 16 on a single
   Compac F - because a Bitcoin pool's difficulty is always well above it. For
   Hathor that assumption is wrong: a chip at ticket 16 cannot report anything
-  below weight 36, so it can never answer a tx job, however fast it hashes.
+  below weight 36. Such a nonce over-satisfies a weight-17 tx, so the chip can
+  still answer one in principle - but only after it finds weight-36 work, which
+  takes ticket * 2^32 / hashrate. At any hashrate these sticks actually reach
+  that is far longer than a tx lives, so in practice it answers nothing.
 
   Measured on mainnet: a 75.8 GH/s Compac F at ticket 16 takes ~906 ms to report
   anything, against a median tx lifetime of 54 ms - it solved 0 of 133 txs over
@@ -38,7 +41,10 @@ only tens of milliseconds before another miner solves it.
   stock behaviour (chip maximum) if you point this build at a Bitcoin pool.
 
   BM1384 (2Pac, Terminus) and BM1387 (NewPac) chips do not use this setting;
-  their ticket is derived from hashrate and already lands at 1 in practice.
+  their ticket is derived from hashrate instead. That lands at 1 only on slower
+  sticks - a 2Pac at ~5 GH/s gets difficulty 1, but around 10 GH/s it becomes 2
+  and around 20 GH/s it becomes 4, so a well-tuned 2Pac carries a reporting
+  floor too. Lowering it there would need a separate change to that formula.
 
 Building on a modern toolchain
 
