@@ -1,0 +1,7 @@
+# Keeps the release build context small and reproducible. Notably drops .git
+# (~23 MB) and any tarballs produced by a previous run.
+.git
+.gitignore
+dist
+*.tar.gz
+*.tar.gz.sha256

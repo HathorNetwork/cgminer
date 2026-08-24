@@ -58,6 +58,26 @@ Building on a modern toolchain
   Verified on Ubuntu 22.04 with the dependency list under "If building on Ubuntu"
   below.
 
+Prebuilt binaries
+
+  You do not have to build this yourself. Every tagged release publishes ready
+  to run binaries on the Releases page, for linux-arm64 (Raspberry Pi OS 64-bit,
+  `uname -m` says aarch64), linux-armhf (Raspberry Pi OS 32-bit, armv7l) and
+  linux-amd64.
+
+  One binary per architecture covers every GekkoScience model. All of them live
+  in the same driver and are selected at runtime from the USB vendor/product id,
+  and the --gekko-*-detect options are opt-in allowlists that all default to off,
+  so an unrestricted build detects the 2Pac, the NewPac and the Compac F alike.
+  Everything that differs per device - frequency, core voltage, ticket
+  difficulty - is runtime configuration, not a build-time choice.
+
+  They are built on Debian Bullseye, so they run on Bullseye and anything newer.
+  Each tarball carries an INSTALL.txt with the swap-and-restart steps and a
+  RUNTIME-DEPS.txt listing the shared libraries needed. The workflow that builds
+  them is .github/workflows/build-release.yml; it smoke-tests every binary
+  before publishing.
+
 
 Search below for the following headings for details about mining
 

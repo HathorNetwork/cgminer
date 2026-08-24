@@ -1,0 +1,53 @@
+# Release build for cgminer-htr.
+#
+# Built on Debian bullseye (glibc 2.31) on purpose: glibc is forward- but not
+# backward-compatible, so a binary linked here runs on Raspberry Pi OS Bullseye
+# and every newer release. Building on the GitHub runner's own Ubuntu 24.04
+# (glibc 2.39) would produce a binary that fails to start on Bookworm.
+#
+# libjansson-dev is deliberately NOT installed: configure then falls back to the
+# bundled compat/jansson-2.9 and links it statically, which is one less runtime
+# dependency on the miner host.
+
+FROM debian:bullseye AS build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        autoconf \
+        automake \
+        libtool \
+        pkg-config \
+        libcurl4-openssl-dev \
+        libusb-1.0-0-dev \
+        libncurses-dev \
+        zlib1g-dev \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . /src
+
+# -fcommon is required on GCC 10+ (Bullseye ships GCC 10, Bookworm GCC 12).
+# This tree predates -fno-common becoming the default and otherwise fails to
+# link with "multiple definition of 'bab_drv'" and friends. Pre-existing
+# upstream issue, not specific to this fork's changes.
+RUN ./autogen.sh > /tmp/autogen.log 2>&1 || (tail -40 /tmp/autogen.log; exit 1)
+RUN ./configure --enable-gekko CFLAGS="-O2 -fcommon" > /tmp/configure.log 2>&1 \
+    || (tail -40 /tmp/configure.log; exit 1)
+RUN make -j"$(nproc)" > /tmp/make.log 2>&1 || (tail -60 /tmp/make.log; exit 1)
+RUN strip cgminer
+
+COPY .github/docker/smoke-test.sh /usr/local/bin/smoke-test.sh
+RUN /usr/local/bin/smoke-test.sh /src/cgminer
+
+# Stage the payload so the export stage is a flat, predictable layout.
+RUN set -eux; \
+    mkdir -p /out; \
+    cp /src/cgminer /out/cgminer; \
+    cp /src/README /out/README; \
+    cp /src/ASIC-README /out/ASIC-README 2>/dev/null || true; \
+    objdump -p /out/cgminer | awk '/NEEDED/ {print $2}' > /out/RUNTIME-DEPS.txt; \
+    cat /out/RUNTIME-DEPS.txt
+
+FROM scratch AS artifact
+COPY --from=build /out/ /

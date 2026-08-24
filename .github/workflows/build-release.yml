@@ -1,0 +1,128 @@
+name: Build release binaries
+
+# Produces ready-to-run cgminer binaries for the Hathor mining fleet, so an
+# operator can drop in a new build instead of installing a toolchain and
+# compiling on a Raspberry Pi.
+#
+# Push a tag (v1.2.3) to cut a release, or run it manually from the Actions tab
+# to get throwaway artifacts without publishing anything. Pull requests build
+# and smoke-test but publish nothing.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Raspberry Pi OS 64-bit -> `uname -m` reports aarch64.
+          # Built natively on GitHub's ARM runners (free for public repos), so
+          # the smoke tests execute on real ARM hardware rather than under QEMU.
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            qemu: false
+          # Raspberry Pi OS 32-bit -> `uname -m` reports armv7l.
+          # Needs QEMU: GitHub's ARM runners are Cobalt/Ampere cores, which do
+          # not support 32-bit execution, so this cannot be built natively here.
+          - arch: armhf
+            platform: linux/arm/v7
+            runner: ubuntu-24.04
+            qemu: true
+          # Not for the fleet - lets a maintainer reproduce a shipped binary on
+          # a normal dev machine.
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+            qemu: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.qemu
+        uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and smoke-test
+        run: |
+          docker buildx build \
+            --platform "${{ matrix.platform }}" \
+            --file .github/docker/Dockerfile.release \
+            --target artifact \
+            --progress plain \
+            --output "type=local,dest=dist/${{ matrix.arch }}" \
+            .
+
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="$(git describe --tags --always --dirty 2>/dev/null || git rev-parse --short HEAD)"
+          fi
+          NAME="cgminer-htr-${VERSION}-linux-${{ matrix.arch }}"
+          mv "dist/${{ matrix.arch }}" "dist/${NAME}"
+          cp .github/docker/INSTALL.txt "dist/${NAME}/INSTALL.txt"
+          tar -C dist -czf "${NAME}.tar.gz" "${NAME}"
+          sha256sum "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "--- shipped ---"
+          ls -l "dist/${NAME}"
+          echo "--- runtime deps ---"
+          cat "dist/${NAME}/RUNTIME-DEPS.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            *.tar.gz
+            *.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ls -l artifacts
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber \
+              artifacts/*
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes \
+              --verify-tag \
+              artifacts/*
+          fi
