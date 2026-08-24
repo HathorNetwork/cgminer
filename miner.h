@@ -1097,6 +1097,7 @@ extern int opt_gekko_step_delay;
 extern int opt_gekko_tune2;
 extern int opt_gekko_gsa1_start_freq;
 extern int opt_gekko_gsa1_corev;
+extern float opt_gekko_ticket_diff;
 #endif
 #ifdef USE_KLONDIKE
 extern char *opt_klondike_options;

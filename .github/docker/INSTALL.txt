@@ -1,0 +1,108 @@
+cgminer-htr - prebuilt binary
+=============================
+
+This is a build of HathorNetwork/cgminer with --gekko-ticket-diff, the option
+that lets a GekkoScience device answer Hathor transaction jobs instead of only
+block jobs. See the README section "GEKKO TICKET DIFFICULTY" for what it does.
+
+
+1. PICK THE RIGHT TARBALL
+-------------------------
+
+Run this on the machine that has the miner plugged in:
+
+    uname -m
+
+    aarch64   -> use the linux-arm64 tarball   (Raspberry Pi OS 64-bit)
+    armv7l    -> use the linux-armhf tarball   (Raspberry Pi OS 32-bit)
+    x86_64    -> use the linux-amd64 tarball   (normal PC or server)
+
+If you download the wrong one, it will not start and will say
+"cannot execute binary file" or "Exec format error". No harm done - just get
+the other one.
+
+
+2. CHECK YOU HAVE THE LIBRARIES
+-------------------------------
+
+The binary is dynamically linked. RUNTIME-DEPS.txt lists exactly what it needs.
+On Raspberry Pi OS / Debian / Ubuntu these are almost always already installed;
+if not:
+
+    sudo apt-get install libcurl4 libusb-1.0-0 libncurses6
+
+You do NOT need any -dev packages, and you do not need a compiler.
+
+The JSON library (jansson) is compiled into the binary, so it is not a
+dependency you have to install.
+
+This binary is built on Debian Bullseye. glibc is forward-compatible but not
+backward-compatible, so it runs on Bullseye and anything newer (Bookworm,
+Trixie), but NOT on anything older.
+
+
+3. INSTALL IT
+-------------
+
+Stop the miner first, so the USB device is free:
+
+    sudo systemctl stop cgminer        # or whatever your service is called
+
+Keep the old binary so you can go back:
+
+    sudo cp /usr/local/bin/cgminer /usr/local/bin/cgminer.bak
+
+Put the new one in place (adjust the path if yours lives somewhere else -
+`which cgminer` will tell you):
+
+    sudo install -m 755 ./cgminer /usr/local/bin/cgminer
+
+Start it again:
+
+    sudo systemctl start cgminer
+
+Your udev rules, USB group membership, and service file are untouched.
+
+
+4. CONFIRM IT WORKED
+--------------------
+
+The option defaults to 1, so you do not have to change your command line or
+your .conf file. In the log you should now see:
+
+    set ticket to 0x00/1
+
+instead of the old value (0xf0/16 on a BM1397 board such as the Compac F).
+
+Two things to watch in the first hour:
+
+  - Transaction shares. This is the whole point: the device should start
+    getting accepted transaction jobs, not only block jobs.
+  - The string "PT_NONONCE" in the log. A lower ticket means the driver
+    expects nonces more often, so its stall watchdog window gets shorter. If
+    you see PT_NONONCE and the frequency resetting, please report it - that is
+    the one known risk of this change and we want to know.
+
+To go back at any time:
+
+    sudo systemctl stop cgminer
+    sudo cp /usr/local/bin/cgminer.bak /usr/local/bin/cgminer
+    sudo systemctl start cgminer
+
+Or keep this binary and turn the change off with --gekko-ticket-diff 0, which
+restores the original upstream behaviour.
+
+
+5. IF YOU PREFER TO BUILD IT YOURSELF
+-------------------------------------
+
+    sudo apt-get install build-essential autoconf automake libtool pkg-config \
+        libcurl4-openssl-dev libusb-1.0-0-dev libncurses-dev zlib1g-dev
+    ./autogen.sh
+    ./configure --enable-gekko CFLAGS="-O2 -fcommon"
+    make
+
+-fcommon is required on GCC 10 and newer, which includes every current
+Raspberry Pi OS. Without it the link fails with "multiple definition of
+'bab_drv'". This is a pre-existing upstream issue, not something this fork
+introduced.

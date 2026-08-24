@@ -351,6 +351,11 @@ bool opt_gekko_mine2 = false; // gekko code ignores it
 int opt_gekko_tune2 = 0;
 int opt_gekko_gsa1_start_freq = 300;
 int opt_gekko_gsa1_corev = 300; // 0x3c
+// Ticket difficulty requested from BM1397/BM1362 chips. 0 = the chip's highest
+// valid ticket (upstream behaviour). Defaults to 1 because this fork mines
+// Hathor, whose tx jobs arrive at weight 17-32 and cannot be answered by a chip
+// whose reporting floor sits at the maximum ticket. See driver-gekko.c.
+float opt_gekko_ticket_diff = 1.0;
 #endif
 #ifdef USE_HASHRATIO
 #include "driver-hashratio.h"
@@ -1354,6 +1359,31 @@ static char *set_float_0_to_500(const char *arg, float *i)
 	return NULL;
 }
 
+#ifdef USE_GEKKO
+static char *set_float_ticket_diff(const char *arg, float *i)
+{
+	char *err = opt_set_floatval(arg, i);
+
+	if (err)
+		return err;
+
+	// Reject NaN explicitly: every comparison against NaN is false, so it would
+	// slip past the range test below and reach set_ticket(), where floor(NaN)
+	// matches no ticket_1397[] entry and leaves the device's ticket unset.
+	if (isnan(*i))
+		return "Value must be a number";
+
+	// 0 means "let the chip pick the highest ticket it supports". Above 0 the
+	// value must be at least 1: set_ticket() floors it and the lowest
+	// ticket_1397[] entry is diff 1, so anything in (0,1) would match no entry
+	// and silently leave the ticket unset. 64 is the largest entry in the table.
+	if (*i != 0 && (*i < 1 || *i > 64))
+		return "Value out of range - use 0 for the chip maximum, or 1 to 64";
+
+	return NULL;
+}
+#endif
+
 static char *set_float_125_to_500(const char *arg, float *i)
 {
 	char *err = opt_set_floatval(arg, i);
@@ -2049,6 +2079,9 @@ static struct opt_table opt_config_table[] = {
 	OPT_WITH_ARG("--gekko-tune2",
 			set_int_0_to_9999, opt_show_intval, &opt_gekko_tune2,
 			"Tune up mine2 mins 30-9999, default 0=never"),
+	OPT_WITH_ARG("--gekko-ticket-diff",
+		     set_float_ticket_diff, opt_show_floatval, &opt_gekko_ticket_diff,
+		     "Set GekkoScience BM1397/BM1362 ticket difficulty 1-64, 0=chip maximum, default 1 (lowest reporting floor, needed for Hathor tx mining)"),
 	OPT_WITH_ARG("--gekko-compaca1-start-freq",
 		     set_int_0_to_9999, opt_show_intval, &opt_gekko_gsa1_start_freq,
                      "Ramp CompacA1 start frequency MHz 100-800"),
@@ -6031,6 +6064,9 @@ void write_config(FILE *fcfg)
 
 			if (opt->type & OPT_HASARG &&
 			    ((void *)opt->cb_arg == (void *)set_float_0_to_500 ||
+#ifdef USE_GEKKO
+			     (void *)opt->cb_arg == (void *)set_float_ticket_diff ||
+#endif
 			     (void *)opt->cb_arg == (void *)set_float_125_to_500 ||
 			     (void *)opt->cb_arg == (void *)set_float_100_to_250)) {
 				fprintf(fcfg, ",\n\"%s\" : \"%.1f\"", p+2, *(float *)opt->u.arg);
